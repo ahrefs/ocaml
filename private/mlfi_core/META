@@ -1,0 +1,8 @@
+description = "lexifi extension"
+version = "5.5.1"
+requires = ""
+archive(byte) = "mlfi.cma"
+archive(native) = "mlfi.cmxa"
+plugin(byte) = "mlfi.cma"
+plugin(native) = "mlfi.cmxs"
+exists_if = "mlfi.cma mlfi.cmxa"

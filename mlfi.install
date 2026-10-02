@@ -1,0 +1,22 @@
+# mlfi
+
+lib: [
+  "mlfi.opam" {"opam"}
+  "private/mlfi_core/META" {"META"}
+	"private/mlfi_core/mlfi_types.cmi" {"mlfi_types.cmi"}
+	"private/mlfi_core/mlfi_type_path.cmi" {"mlfi_type_path.cmi"}
+	"private/mlfi_core/mlfi_xtypes.cmi" {"mlfi_xtypes.cmi"}
+	"private/mlfi_core/mlfi_json.cmi" {"mlfi_json.cmi"}
+	"private/mlfi_core/mlfi_types.cmo" {"mlfi_types.cmo"}
+	"private/mlfi_core/mlfi_type_path.cmo" {"mlfi_type_path.cmo"}
+	"private/mlfi_core/mlfi_xtypes.cmo" {"mlfi_xtypes.cmo"}
+	"private/mlfi_core/mlfi_json.cmo" {"mlfi_json.cmo"}
+	"private/mlfi_core/mlfi_types.cmx" {"mlfi_types.cmx"}
+	"private/mlfi_core/mlfi_type_path.cmx" {"mlfi_type_path.cmx"}
+	"private/mlfi_core/mlfi_xtypes.cmx" {"mlfi_xtypes.cmx"}
+	"private/mlfi_core/mlfi_json.cmx" {"mlfi_json.cmx"}
+	"private/mlfi_core/mlfi.cma" {"mlfi.cma"}
+	"private/mlfi_core/mlfi.cmxa" {"mlfi.cmxa"}
+	"private/mlfi_core/mlfi.cmxs" {"mlfi.cmxs"}
+	"private/mlfi_core/mlfi.a" {"mlfi.a"}
+]

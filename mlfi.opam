@@ -1,0 +1,19 @@
+opam-version: "2.0"
+version: "5.5.1"
+license: "BLEEP BLOOP"
+synopsis: "lexifi extensions"
+maintainer: "eerrrrrr"
+authors: [ "lexifi" ]
+homepage: "https://github.com/lexifi/ocaml/"
+bug-reports: "https://github.com/lexifi/ocaml/issues"
+depends: [
+  "ocaml-variants" {= "5.5.1"}
+]
+build-env: [
+  [MSYS2_ARG_CONV_EXCL = "*"]
+  [LSAN_OPTIONS = "detect_leaks=0,exitcode=0"]
+  [ASAN_OPTIONS = "detect_leaks=0,exitcode=0"]
+]
+build: [
+  [ make "-C" "private/mlfi_core/" ]
+]
