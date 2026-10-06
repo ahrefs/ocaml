@@ -231,3 +231,17 @@ Build paths from descriptors:
 let field_path = Mlfi_xtypes.RecordField.path field
 let ctor_path = Mlfi_xtypes.Constructor.path ctor
 ```
+
+mlfi opam package
+-----------------
+
+The `mlfi.opam` package is for installing the files necessary to use the extension described above.
+
+First, setup an opam switch for the compiler as per HACKING.adoc
+
+```
+opam switch create . --empty
+opam install .
+```
+
+You can then use the `mlfi` opam pacakge and the `mlfi` ocamlfind library to use the `Mlfi_*` modules into your project.
