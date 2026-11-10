@@ -338,6 +338,32 @@ let _ =
 - : int * string list = (3, ["x"; "init"])
 |}]
 
+(* [f a @@ x] is typed as [f a x] too *)
+let _ = List.map (fun r -> r.a) @@ [T.x];;
+[%%expect{|
+- : int list = [1]
+|}, Principal{|
+Line 1, characters 29-30:
+1 | let _ = List.map (fun r -> r.a) @@ [T.x];;
+                                 ^
+Warning 18 [not-principal]: this type-based field disambiguation is not
+  principal.
+
+- : int list = [1]
+|}]
+
+let _ =
+  let log = ref [] in
+  let trace s v = log := s :: !log; v in
+  let r =
+    List.fold_left (fun acc x -> acc + x) (trace "init" 0)
+    @@ (trace "x" [1; 2] : int list)
+  in
+  r, List.rev !log;;
+[%%expect{|
+- : int * string list = (3, ["x"; "init"])
+|}]
+
 (* Arguments whose typing depends on identifiers that the function literal
    may refine are not moved before it *)
 module U = struct type r = { a : int; b : int } end

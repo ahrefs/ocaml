@@ -4476,12 +4476,13 @@ let check_apply_prim_type prim typ =
       end
   | _ -> false
 
-(* [x |> f a1 ... an] is typed as [f a1 ... an x] when:
+(* [x |> f a1 ... an] and [f a1 ... an @@ x] are typed as [f a1 ... an x]
+   when:
    - [x] is passed to an unlabelled parameter of [f], and labels are not
      omitted, in both forms;
    - some [ai] is a function literal, and [x] is independent, so that the
      function literal can be typed after [x] (see [type_application]). *)
-let can_merge_revapply env lid sargs sx =
+let can_merge_pipe env lid sargs sx =
   not !Clflags.classic && not (Env.has_local_constraints env)
   && List.exists (fun (_, e) ->
          match e.pexp_desc with Pexp_function _ -> true | _ -> false) sargs
@@ -4959,6 +4960,14 @@ and type_expect_
         lower_args outer_level env funct.exp_type;
         funct
       in
+      let type_pipe actual_sfunct sarg =
+        match actual_sfunct.pexp_desc with
+        | Pexp_apply ({ pexp_desc = Pexp_ident lid } as sf, sargs')
+          when can_merge_pipe env lid sargs' sarg ->
+            type_sfunct sf, sargs' @ [Nolabel, sarg]
+        | _ ->
+            type_sfunct actual_sfunct, [Nolabel, sarg]
+      in
       let funct, sargs =
         let funct = type_sfunct sfunct in
         match funct.exp_desc, sargs with
@@ -4967,19 +4976,12 @@ and type_expect_
           [Nolabel, sarg; Nolabel, actual_sfunct]
           when is_inferred actual_sfunct
             && check_apply_prim_type Revapply val_type ->
-            begin match actual_sfunct.pexp_desc with
-            | Pexp_apply ({ pexp_desc = Pexp_ident lid } as sf, sargs')
-              when can_merge_revapply env lid sargs' sarg ->
-                (* [x |> f a] is typed as [f a x] *)
-                type_sfunct sf, sargs' @ [Nolabel, sarg]
-            | _ ->
-                type_sfunct actual_sfunct, [Nolabel, sarg]
-            end
+            type_pipe actual_sfunct sarg
         | Texp_ident (_, _,
                       {val_kind = Val_prim {prim_name="%apply"}; val_type}),
           [Nolabel, actual_sfunct; Nolabel, sarg]
           when check_apply_prim_type Apply val_type ->
-            type_sfunct actual_sfunct, [Nolabel, sarg]
+            type_pipe actual_sfunct sarg
         | _ ->
             funct, sargs
       in
