@@ -4953,22 +4953,31 @@ lambda/value_rec_compiler.cmi : \
     typing/ident.cmi
 file_formats/cmi_format.cmo : \
     typing/types.cmi \
+    typing/subst.cmi \
+    typing/path.cmi \
+    parsing/parsetree.cmi \
     utils/misc.cmi \
     parsing/location.cmi \
+    typing/ident.cmi \
     utils/format_doc.cmi \
     utils/config.cmi \
     utils/compression.cmi \
     file_formats/cmi_format.cmi
 file_formats/cmi_format.cmx : \
     typing/types.cmx \
+    typing/subst.cmx \
+    typing/path.cmx \
+    parsing/parsetree.cmi \
     utils/misc.cmx \
     parsing/location.cmx \
+    typing/ident.cmx \
     utils/format_doc.cmx \
     utils/config.cmx \
     utils/compression.cmx \
     file_formats/cmi_format.cmi
 file_formats/cmi_format.cmi : \
     typing/types.cmi \
+    typing/subst.cmi \
     utils/misc.cmi \
     utils/format_doc.cmi
 file_formats/cmo_format.cmi :
