@@ -38,7 +38,7 @@ exception Error of error
 
 module Cmi_consistbl = Consistbl.Make (Misc.Stdlib.String)
 let crc_interfaces = Cmi_consistbl.create ()
-let interfaces = ref ([] : string list)
+let interfaces = String.Tbl.create 100
 
 module Cmx_consistbl = Consistbl.Make (Misc.Stdlib.String)
 let crc_implementations = Cmx_consistbl.create ()
@@ -49,7 +49,7 @@ let check_consistency file_name unit crc =
   begin try
     List.iter
       (fun (name, crco) ->
-        interfaces := name :: !interfaces;
+        String.Tbl.replace interfaces name ();
         match crco with
           None -> ()
         | Some crc -> Cmi_consistbl.check crc_interfaces name crc file_name)
@@ -85,7 +85,8 @@ let check_consistency file_name unit crc =
     cmx_required := String.Set.add unit.ui_name !cmx_required
 
 let extract_crc_interfaces () =
-  Cmi_consistbl.extract !interfaces crc_interfaces
+  Cmi_consistbl.extract (List.of_seq (String.Tbl.to_seq_keys interfaces))
+    crc_interfaces
 let extract_crc_implementations () =
   Cmx_consistbl.extract (String.Set.elements !implementations)
     crc_implementations
@@ -429,7 +430,7 @@ let reset () =
   Cmi_consistbl.clear crc_interfaces;
   Cmx_consistbl.clear crc_implementations;
   cmx_required := String.Set.empty;
-  interfaces := [];
+  String.Tbl.reset interfaces;
   implementations := String.Set.empty;
   lib_ccobjs := [];
   lib_ccopts := []
