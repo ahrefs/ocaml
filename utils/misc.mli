@@ -982,3 +982,19 @@ type modname = string
 type crcs = (modname * Digest.BLAKE128.t option) list
 
 type alerts = string Stdlib.String.Map.t
+
+(** {1 Bitmaps} *)
+
+module Bitmap : sig
+  type t
+  (** Fixed-size mutable sets of integers from [0] to [length - 1]. *)
+
+  val make : int -> t
+  (** [make n] is an empty bitmap of length [n]. *)
+
+  val set : t -> int -> unit
+  val get : t -> int -> bool
+
+  val iter : (int -> unit) -> t -> unit
+  (** [iter f b] calls [f] on each element of [b], in increasing order. *)
+end

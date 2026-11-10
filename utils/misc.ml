@@ -1182,6 +1182,38 @@ type crcs = (modname * Digest.BLAKE128.t option) list
 
 type alerts = string Stdlib.String.Map.t
 
+module Bitmap = struct
+  type t = {
+    length: int;
+    bits: bytes
+  }
+
+  let make n =
+    { length = n; bits = Bytes.make ((n + 7) lsr 3) '\000' }
+
+  let check_bound t n =
+    if n < 0 || n >= t.length then invalid_arg "Misc.Bitmap"
+
+  let set t n =
+    check_bound t n;
+    let pos = n lsr 3 and bit = 1 lsl (n land 7) in
+    Bytes.set_uint8 t.bits pos (Bytes.get_uint8 t.bits pos lor bit)
+
+  let get t n =
+    check_bound t n;
+    let pos = n lsr 3 and bit = 1 lsl (n land 7) in
+    Bytes.get_uint8 t.bits pos land bit <> 0
+
+  let iter f t =
+    for i = 0 to Bytes.length t.bits - 1 do
+      let c = Bytes.get_uint8 t.bits i in
+      if c <> 0 then
+        for j = 0 to 7 do
+          if c land (1 lsl j) <> 0 then f ((i lsl 3) + j)
+        done
+    done
+end
+
 module Magic_number = struct
   type native_obj_config = {
     flambda : bool;

@@ -593,8 +593,17 @@ val send :
 
 (** Generic Cmm fragments *)
 
+(** Sets of generic functions needed by a set of units *)
+module Generic_fns_tbl : sig
+  type t
+  val make : unit -> t
+  val add : t -> Cmx_format.generic_fns -> unit
+  val add_unit : t -> Cmx_format.unit_infos -> unit
+  val entries : t -> Cmx_format.generic_fns
+end
+
 (** Generate generic functions *)
-val generic_functions : bool -> Cmx_format.unit_infos list -> Cmm.phrase list
+val generic_functions : bool -> Generic_fns_tbl.t -> Cmm.phrase list
 
 val placeholder_dbg : unit -> Debuginfo.t
 val placeholder_fun_dbg : human_name:string -> Debuginfo.t
@@ -631,7 +640,7 @@ val predef_exception: int -> string -> phrase
 (** Generate data for a global string constant *)
 val emit_global_string_constant: string -> string -> phrase
 
-val plugin_header: (Cmx_format.unit_infos * Digest.BLAKE128.t) list -> phrase
+val plugin_header: Cmxs_format.dynunit list -> phrase
 
 (** Emit constant symbols *)
 

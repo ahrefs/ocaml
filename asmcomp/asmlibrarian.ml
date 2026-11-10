@@ -26,12 +26,6 @@ type error =
 
 exception Error of error
 
-let default_ui_export_info =
-  if Config.flambda then
-    Cmx_format.Flambda Export_info.empty
-  else
-    Cmx_format.Clambda Clambda.Value_unknown
-
 let read_info name =
   let filename =
     try
@@ -40,11 +34,6 @@ let read_info name =
       raise(Error(File_not_found name)) in
   let (info, crc) = Compilenv.read_unit_info filename in
   info.ui_force_link <- info.ui_force_link || !Clflags.link_everything;
-  (* There is no need to keep the approximation in the .cmxa file,
-     since the compiler will go looking directly for .cmx files.
-     The linker, which is the only one that reads .cmxa files, does not
-     need the approximation. *)
-  info.ui_export_info <- default_ui_export_info;
   filename, (info, crc)
 
 let create_archive file_list lib_name =
@@ -74,8 +63,49 @@ let create_archive file_list lib_name =
        (match Linkdeps.check ldeps with
         | None -> ()
         | Some e -> raise (Error (Link_error e)));
+       (* The imports of all units, without duplicates. A name may appear
+          twice, with and without a CRC, so that the imports of each unit
+          are kept exactly. *)
+       let all_imports imports_of =
+         let index = Hashtbl.create 42 in
+         List.iter
+           (fun (_, (unit, _)) ->
+              List.iter (fun imp -> Hashtbl.replace index imp 0)
+                (imports_of unit))
+           units;
+         let arr = Array.of_seq (Hashtbl.to_seq_keys index) in
+         Array.sort compare arr;
+         Array.iteri (fun i imp -> Hashtbl.replace index imp i) arr;
+         arr, index
+       in
+       let cmis, cmi_index = all_imports (fun u -> u.ui_imports_cmi) in
+       let cmxs, cmx_index = all_imports (fun u -> u.ui_imports_cmx) in
+       let bitmap arr index imports =
+         let b = Misc.Bitmap.make (Array.length arr) in
+         List.iter (fun imp -> Misc.Bitmap.set b (Hashtbl.find index imp))
+           imports;
+         b
+       in
+       let genfns = Cmm_helpers.Generic_fns_tbl.make () in
+       let lib_units =
+         List.map
+           (fun (_, (unit, crc)) ->
+              Cmm_helpers.Generic_fns_tbl.add_unit genfns unit;
+              { li_name = unit.ui_name;
+                li_symbol = unit.ui_symbol;
+                li_crc = crc;
+                li_defines = unit.ui_defines;
+                li_force_link = unit.ui_force_link;
+                li_need_stdlib = unit.ui_need_stdlib;
+                li_imports_cmi = bitmap cmis cmi_index unit.ui_imports_cmi;
+                li_imports_cmx = bitmap cmxs cmx_index unit.ui_imports_cmx })
+           units
+       in
        let infos =
-         { lib_units = List.map snd units;
+         { lib_imports_cmi = cmis;
+           lib_imports_cmx = cmxs;
+           lib_units;
+           lib_generic_fns = Cmm_helpers.Generic_fns_tbl.entries genfns;
            lib_ccobjs = !Clflags.ccobjs;
            lib_ccopts = !Clflags.all_ccopts } in
        output_value outchan infos;
