@@ -57,9 +57,11 @@ let command_line_options =
 
 (* Addressing modes *)
 
+type sym_global = Global | Local    (* See [Cmm.is_global] *)
+
 type addressing_mode =
   | Iindexed of int                     (* reg + displ *)
-  | Ibased of string * int              (* global var + displ *)
+  | Ibased of string * sym_global * int (* global var + displ *)
 
 (* We do not support the reg + shifted reg addressing mode, because
    what we really need is reg + shifted reg + displ,
@@ -125,7 +127,7 @@ let identity_addressing = Iindexed 0
 let offset_addressing addr delta =
   match addr with
   | Iindexed n -> Iindexed(n + delta)
-  | Ibased(s, n) -> Ibased(s, n + delta)
+  | Ibased(s, glob, n) -> Ibased(s, glob, n + delta)
 
 (* Printing operations and addressing modes *)
 
@@ -134,9 +136,9 @@ let print_addressing printreg addr ppf arg =
   | Iindexed n ->
       printreg ppf arg.(0);
       if n <> 0 then fprintf ppf " + %i" n
-  | Ibased(s, 0) ->
+  | Ibased(s, _, 0) ->
       fprintf ppf "\"%s\"" s
-  | Ibased(s, n) ->
+  | Ibased(s, _, n) ->
       fprintf ppf "\"%s\" + %i" s n
 
 let print_specific_operation printreg op ppf arg =

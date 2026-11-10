@@ -184,8 +184,8 @@ fundecl:
          fun_dbg = debuginfo ()} }
 ;
 fun_name:
-    STRING              { $1 }
-  | IDENT               { $1 }
+    STRING              { Cmm.global_symbol $1 }
+  | IDENT               { Cmm.global_symbol $1 }
 params:
     oneparam params     { $1 :: $2 }
   | /**/                { [] }
@@ -210,7 +210,7 @@ componentlist:
 expr:
     INTCONST    { Cconst_int ($1, debuginfo ()) }
   | FLOATCONST  { Cconst_float (float_of_string $1, debuginfo ()) }
-  | STRING      { Cconst_symbol ($1, debuginfo ()) }
+  | STRING      { Cconst_symbol (Cmm.global_symbol $1, debuginfo ()) }
   | IDENT       { find_ident $1 }
   | LBRACKET RBRACKET { Ctuple [] }
   | LPAREN LET letdef sequence RPAREN { make_letdef $3 $4 }
@@ -404,20 +404,20 @@ datadecl:
 ;
 datalist:
     datalist dataitem           { $2 :: $1 }
+  | datalist GLOBAL STRING      { $1 } /* all symbols are global */
   | /**/                        { [] }
 ;
 dataitem:
-    STRING COLON                { Cdefine_symbol $1 }
+    STRING COLON                { Cdefine_symbol (Cmm.global_symbol $1) }
   | BYTE INTCONST               { Cint8 $2 }
   | HALF INTCONST               { Cint16 $2 }
   | INT INTCONST                { Cint(Nativeint.of_int $2) }
   | FLOAT FLOATCONST            { Cdouble (float_of_string $2) }
-  | ADDR STRING                 { Csymbol_address $2 }
-  | VAL STRING                 { Csymbol_address $2 }
+  | ADDR STRING                 { Csymbol_address (Cmm.global_symbol $2) }
+  | VAL STRING                 { Csymbol_address (Cmm.global_symbol $2) }
   | KSTRING STRING              { Cstring $2 }
   | SKIP INTCONST               { Cskip $2 }
   | ALIGN INTCONST              { Calign $2 }
-  | GLOBAL STRING               { Cglobal_symbol $2 }
 ;
 catch_handlers:
   | catch_handler

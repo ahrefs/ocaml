@@ -139,10 +139,42 @@ let mem__imp s =
   let imp_s = get_imp_symbol s in
   mem64_rip QWORD (emit_symbol imp_s)
 
+(* Output a label *)
+
+let label_name s =
+  match system with
+  | S_macosx | S_win64 -> "L" ^ s
+  | _ -> ".L" ^ s
+
+let emit_label lbl = label_name (Int.to_string lbl)
+
+(* Symbols that are [Local] in the sense of [Cmm.is_global] are emitted as
+   assembler-local labels, so that references to them are resolved by the
+   assembler and they do not appear in the symbol table of the object file.
+   [Global] symbols defined in the current file are given such a label too,
+   so that they can be referred to locally. *)
+
+let emit_local_symbol s = label_name (emit_symbol s)
+
+let emit_cmm_symbol (s : Cmm.symbol) =
+  match s.sym_global with
+  | Global -> emit_symbol s.sym_name
+  | Local -> emit_local_symbol s.sym_name
+
+let add_used_cmm_symbol (s : Cmm.symbol) =
+  match s.sym_global with
+  | Global -> add_used_symbol s.sym_name
+  | Local -> ()
+
 let rel_plt s =
   if windows && !Clflags.dlcode then mem__imp s
   else
     sym (if use_plt then emit_symbol s ^ "@PLT" else emit_symbol s)
+
+let rel_plt_cmm_symbol (s : Cmm.symbol) =
+  match s.sym_global with
+  | Global -> rel_plt s.sym_name
+  | Local -> sym (emit_local_symbol s.sym_name)
 
 let emit_call s = I.call (rel_plt s)
 
@@ -159,15 +191,18 @@ let load_symbol_addr s arg =
   else
     I.mov (sym (emit_symbol s)) arg
 
+let load_cmm_symbol_addr (s : Cmm.symbol) arg =
+  match s.sym_global with
+  | Global -> load_symbol_addr s.sym_name arg
+  | Local ->
+      (* [arg] can be a stack slot when not in PIC mode, see reload.ml *)
+      if !Clflags.pic_code || !Clflags.dlcode || Arch.win64 then
+        I.lea (mem64_rip NONE (emit_local_symbol s.sym_name)) arg
+      else
+        I.mov (sym (emit_local_symbol s.sym_name)) arg
+
 let domain_field f =
   mem64 QWORD (Domainstate.idx_of_field f * 8) R14
-
-(* Output a label *)
-
-let emit_label lbl =
-  match system with
-  | S_macosx | S_win64 -> "L" ^ Int.to_string lbl
-  | _ -> ".L" ^ Int.to_string lbl
 
 let label s = sym (emit_label s)
 
@@ -220,9 +255,12 @@ let arg64 i n = reg64 i.arg.(n)
 
 let addressing addr typ i n =
   match addr with
-  | Ibased(s, ofs) ->
-      add_used_symbol s;
-      mem64_rip typ (emit_symbol s) ~ofs
+  | Ibased(sym_name, glob, ofs) ->
+      let sym_global : Cmm.is_global =
+        match glob with Global -> Global | Local -> Local in
+      let s = { Cmm.sym_name; sym_global } in
+      add_used_cmm_symbol s;
+      mem64_rip typ (emit_cmm_symbol s) ~ofs
   | Iindexed d ->
       mem64 typ d (arg64 i n)
   | Iindexed2 d ->
@@ -258,9 +296,16 @@ let record_frame env live dbg =
   let lbl = record_frame_label env live dbg in
   def_label lbl
 
+(* Calls to [caml_call_gc] go through a local stub, emitted at the end of the
+   file if needed, so that they are resolved by the assembler. *)
+
+let call_gc_local_sym = "caml_call_gc_"
+let call_gc_stub_needed = ref false
+
 let emit_call_gc gc =
   def_label gc.gc_lbl;
-  emit_call "caml_call_gc";
+  call_gc_stub_needed := true;
+  I.call (sym (emit_local_symbol call_gc_local_sym));
   def_label gc.gc_frame_lbl;
   I.jmp (label gc.gc_return_lbl)
 
@@ -525,25 +570,25 @@ let emit_instr env fallthrough i =
           I.movsd (mem64_rip NONE (emit_label lbl)) (res i 0)
       end
   | Lop(Iconst_symbol s) ->
-      add_used_symbol s;
-      load_symbol_addr s (res i 0)
+      add_used_cmm_symbol s;
+      load_cmm_symbol_addr s (res i 0)
   | Lop(Icall_ind) ->
       I.call (arg i 0);
       record_frame env i.live (Dbg_other i.dbg)
   | Lop(Icall_imm { func; }) ->
-      add_used_symbol func;
-      emit_call func;
+      add_used_cmm_symbol func;
+      I.call (rel_plt_cmm_symbol func);
       record_frame env i.live (Dbg_other i.dbg)
   | Lop(Itailcall_ind) ->
       output_epilogue env (fun () -> I.jmp (arg i 0))
   | Lop(Itailcall_imm { func; }) ->
       begin
-        if func = env.f.fun_name then
+        if func.sym_name = env.f.fun_name then
           I.jmp (label env.f.fun_tailrec_entry_point_label)
         else begin
           output_epilogue env begin fun () ->
-            add_used_symbol func;
-            emit_jump func
+            add_used_cmm_symbol func;
+            I.jmp (rel_plt_cmm_symbol func)
           end
         end
       end
@@ -971,6 +1016,7 @@ let fundecl fundecl =
   else
     D.global (emit_symbol fundecl.fun_name);
   D.label (emit_symbol fundecl.fun_name);
+  D.label (emit_local_symbol fundecl.fun_name);
   emit_debug_info fundecl.fun_dbg;
   cfi_startproc ();
   if !Clflags.runtime_variant = "d" then
@@ -1027,15 +1073,21 @@ let fundecl fundecl =
 (* Emission of data *)
 
 let emit_item = function
-  | Cglobal_symbol s -> D.global (emit_symbol s)
-  | Cdefine_symbol s -> add_def_symbol s; _label (emit_symbol s)
+  | Cdefine_symbol { sym_name; sym_global = Local } ->
+      _label (emit_local_symbol sym_name)
+  | Cdefine_symbol { sym_name; sym_global = Global } ->
+      add_def_symbol sym_name;
+      D.global (emit_symbol sym_name);
+      _label (emit_symbol sym_name);
+      _label (emit_local_symbol sym_name)
   | Cint8 n -> D.byte (const n)
   | Cint16 n -> D.word (const n)
   | Cint32 n -> D.long (const_nat n)
   | Cint n -> D.qword (const_nat n)
   | Csingle f -> D.long  (Const (Int64.of_int32 (Int32.bits_of_float f)))
   | Cdouble f -> D.qword (Const (Int64.bits_of_float f))
-  | Csymbol_address s -> add_used_symbol s; D.qword (ConstLabel (emit_symbol s))
+  | Csymbol_address s ->
+      add_used_cmm_symbol s; D.qword (ConstLabel (emit_cmm_symbol s))
   | Cstring s -> D.bytes s
   | Cskip n -> if n > 0 then D.space n
   | Calign n -> D.align n
@@ -1053,6 +1105,7 @@ let begin_assembly() =
   reset_imp_table();
   float_constants := [];
   all_functions := [];
+  call_gc_stub_needed := false;
   if system = S_win64 then begin
     D.extrn "caml_call_gc" NEAR;
     D.extrn "caml_c_call" NEAR;
@@ -1106,6 +1159,14 @@ let end_assembly() =
     end;
     D.align 8;
     List.iter (fun (cst,lbl) -> emit_float_constant cst lbl) !float_constants
+  end;
+
+  if !call_gc_stub_needed then begin
+    emit_named_text_section call_gc_local_sym;
+    D.label (emit_local_symbol call_gc_local_sym);
+    cfi_startproc ();
+    emit_jump "caml_call_gc";
+    cfi_endproc ()
   end;
 
   emit_named_text_section (Compilenv.make_symbol (Some "code_end"));

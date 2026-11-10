@@ -24,7 +24,7 @@ open Mach
 (* Auxiliary for recognizing addressing modes *)
 
 type addressing_expr =
-    Asymbol of string
+    Asymbol of Cmm.symbol
   | Alinear of expression
   | Aadd of expression * expression
   | Ascale of expression * int
@@ -192,7 +192,9 @@ method select_addressing _chunk exp =
   then (Iindexed 0, exp)
   else match a with
     | Asymbol s ->
-        (Ibased(s, d), Ctuple [])
+        let glob : Arch.sym_global =
+          match s.sym_global with Global -> Global | Local -> Local in
+        (Ibased(s.sym_name, glob, d), Ctuple [])
     | Alinear e ->
         (Iindexed d, e)
     | Aadd(e1, e2) ->
@@ -283,13 +285,13 @@ method! select_operation op args dbg =
          dlcode, where reading the symbol needs a GOTPCREL indirection and
          hence a register. *)
       (Iatomic_fetch_add,
-       args @ [Cconst_symbol ("caml_num_domains_running", dbg)])
+       args @ [Cconst_symbol (global_symbol "caml_num_domains_running", dbg)])
   | Catomic_exchange ->
       (Iatomic_exchange,
-       args @ [Cconst_symbol ("caml_num_domains_running", dbg)])
+       args @ [Cconst_symbol (global_symbol "caml_num_domains_running", dbg)])
   | Catomic_compare_exchange ->
       (Iatomic_compare_exchange,
-       args @ [Cconst_symbol ("caml_num_domains_running", dbg)])
+       args @ [Cconst_symbol (global_symbol "caml_num_domains_running", dbg)])
   | _ -> super#select_operation op args dbg
 
 (* Recognize float arithmetic with mem *)

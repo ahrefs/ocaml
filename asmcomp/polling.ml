@@ -164,8 +164,8 @@ let potentially_recursive_tailcall ~future_funcnames funbody =
     | Iop (Ialloc _ | Ipoll _) -> Always_polls
     | Iop (Itailcall_ind) -> Might_not_poll  (* this is a PTRC *)
     | Iop (Itailcall_imm { func }) ->
-      if String.Set.mem func future_funcnames
-         || function_is_assumed_to_never_poll func
+      if String.Set.mem func.sym_name future_funcnames
+         || function_is_assumed_to_never_poll func.sym_name
       then Might_not_poll  (* this is a PTRC *)
       else Always_polls    (* this is not a PTRC *)
     | Iop op ->
