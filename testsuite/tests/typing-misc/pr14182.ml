@@ -172,15 +172,10 @@ val f : T.r option -> int option = <fun>
 
 let f l = List.map (fun r -> r.a) (List.rev (l : T.r list));;
 [%%expect{|
-val f : T.r list -> int list = <fun>
-|}, Principal{|
 Line 1, characters 31-32:
 1 | let f l = List.map (fun r -> r.a) (List.rev (l : T.r list));;
                                    ^
-Warning 18 [not-principal]: this type-based field disambiguation is not
-  principal.
-
-val f : T.r list -> int list = <fun>
+Error: Unbound record field "a"
 |}]
 
 let f (l : T.r list) = ListLabels.map ~f:(fun r -> r.a) l;;
@@ -367,4 +362,71 @@ let _ =
   r, List.rev !log;;
 [%%expect{|
 - : int * string list = (3, ["x"; "init"])
+|}]
+
+(* Arguments whose typing depends on identifiers that the function literal
+   may refine are not moved before it *)
+module U = struct type r = { a : int; b : int } end
+open U
+let k (f : unit -> unit) (n : int) = f (); n;;
+let h x = k (fun () -> ignore x.T.a) x.a;;
+let h x = x.a |> k (fun () -> ignore x.T.a);;
+let h g = k (fun () -> ignore (g : ?o:int -> int -> int)) (g 1);;
+[%%expect{|
+module U : sig type r = { a : int; b : int; } end
+val k : (unit -> unit) -> int -> int = <fun>
+val h : T.r -> int = <fun>
+val h : T.r -> int = <fun>
+val h : (?o:int -> int -> int) -> int = <fun>
+|}, Principal{|
+module U : sig type r = { a : int; b : int; } end
+val k : (unit -> unit) -> int -> int = <fun>
+Line 4, characters 39-40:
+4 | let h x = k (fun () -> ignore x.T.a) x.a;;
+                                           ^
+Warning 18 [not-principal]: this type-based field disambiguation is not
+  principal.
+
+val h : T.r -> int = <fun>
+Line 5, characters 12-13:
+5 | let h x = x.a |> k (fun () -> ignore x.T.a);;
+                ^
+Warning 18 [not-principal]: this type-based field disambiguation is not
+  principal.
+
+val h : T.r -> int = <fun>
+Line 6, characters 59-60:
+6 | let h g = k (fun () -> ignore (g : ?o:int -> int -> int)) (g 1);;
+                                                               ^
+Warning 19 [non-principal-labels]: eliminated optional argument without principality.
+
+val h : (?o:int -> int -> int) -> int = <fun>
+|}]
+
+(* No reordering under local constraints *)
+type _ ty = Int : int ty | Bool : bool ty
+let f (type a) (w : a ty) (x : a) =
+  match w with
+  | Int -> List.map (fun y -> if true then y else 1) [x]
+  | Bool -> [];;
+[%%expect{|
+type _ ty = Int : int ty | Bool : bool ty
+Line 4, characters 11-56:
+4 |   | Int -> List.map (fun y -> if true then y else 1) [x]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Error: This expression has type "int list"
+       but an expression was expected of type "'a"
+       This instance of "int" is ambiguous:
+       it would escape the scope of its equation
+       Hint (manual section 7.2): A type annotation may resolve the ambiguity,
+       either on this expression or the whole function.
+|}]
+
+(* Type errors may now be reported in the function literal *)
+let f (l : string list) = List.map (fun x -> x + 1) l;;
+[%%expect{|
+Line 1, characters 45-46:
+1 | let f (l : string list) = List.map (fun x -> x + 1) l;;
+                                                 ^
+Error: The value "x" has type "string" but an expression was expected of type "int"
 |}]

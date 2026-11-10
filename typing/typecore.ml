@@ -4319,6 +4319,69 @@ let rec is_inferred sexp =
       is_inferred e
   | _ -> false
 
+(* [closed_core_type cty] holds when [cty] contains no type variables *)
+let closed_core_type cty =
+  let closed = ref true in
+  let open Ast_iterator in
+  let typ self t =
+    begin match t.ptyp_desc with
+    | Ptyp_var _ | Ptyp_any -> closed := false
+    | _ -> ()
+    end;
+    default_iterator.typ self t
+  in
+  let it = { default_iterator with typ } in
+  it.typ it cty;
+  !closed
+
+(* [closed_expression env sexp] holds when the types of the identifiers
+   occurring free in [sexp] contain no non-generic type variables, and the
+   type annotations in [sexp] no named type variables, so that typing [sexp]
+   does not depend on information added later to these types. *)
+let closed_expression env sexp =
+  let open Ast_iterator in
+  let bound = ref [] in
+  let pat self p =
+    begin match p.ppat_desc with
+    | Ppat_var v | Ppat_alias (_, v) -> bound := v.txt :: !bound
+    | _ -> ()
+    end;
+    default_iterator.pat self p
+  in
+  let it = { default_iterator with pat } in
+  it.expr it sexp;
+  let closed = ref true in
+  let expr self e =
+    begin match e.pexp_desc with
+    | Pexp_ident lid ->
+        begin match Env.find_value_by_name lid.txt env with
+        | _, { val_type } ->
+            if List.exists (fun v -> get_level v <> generic_level)
+                (free_variables val_type)
+            then closed := false
+        | exception Not_found ->
+            begin match lid.txt with
+            | Lident x when List.mem x !bound -> ()
+            | _ -> closed := false
+            end
+        end
+    | Pexp_struct_item _ ->
+        closed := false
+    | _ -> ()
+    end;
+    default_iterator.expr self e
+  in
+  let typ self t =
+    begin match t.ptyp_desc with
+    | Ptyp_var _ -> closed := false
+    | _ -> ()
+    end;
+    default_iterator.typ self t
+  in
+  let it = { default_iterator with expr; typ } in
+  it.expr it sexp;
+  !closed
+
 (* [is_independent_arg env sarg ty_arg ty_arg0] holds when typing the
    argument [sarg] against [ty_arg] (and its instance [ty_arg0]) cannot
    depend on information that unification may later add to the type
@@ -4362,8 +4425,12 @@ let is_independent_arg env sarg ty_arg ty_arg0 =
     | Pexp_constant { pconst_desc = Pconst_string _ } ->
         false (* may be typed as a format string *)
     | Pexp_constant _ -> true
-    | Pexp_ident _ | Pexp_apply _ | Pexp_field _ | Pexp_send _ | Pexp_new _
-    | Pexp_constraint _ | Pexp_coerce _ -> not arg || no_coercion sarg ty
+    | Pexp_ident _ | Pexp_new _ -> not arg || no_coercion sarg ty
+    | Pexp_apply _ | Pexp_field _ | Pexp_send _ | Pexp_coerce _ ->
+        (not arg || no_coercion sarg ty) && closed_expression env sarg
+    | Pexp_constraint (e, cty) ->
+        (not arg || no_coercion sarg ty) && closed_core_type cty
+        && independent ~arg:false e None
     | Pexp_tuple l -> List.for_all (fun (_, e) -> independent ~arg:false e None) l
     | Pexp_construct ({ txt = Lident "[]" }, None) -> list_elt ty <> None
     | Pexp_construct ({ txt = Lident "::" },
@@ -4416,7 +4483,7 @@ let check_apply_prim_type prim typ =
    - some [ai] is a function literal, and [x] is independent, so that the
      function literal can be typed after [x] (see [type_application]). *)
 let can_merge_pipe env lid sargs sx =
-  not !Clflags.classic
+  not !Clflags.classic && not (Env.has_local_constraints env)
   && List.exists (fun (_, e) ->
          match e.pexp_desc with Pexp_function _ -> true | _ -> false) sargs
   && match Env.find_value_by_name lid.txt env with
@@ -7163,6 +7230,7 @@ and type_application env app_loc funct sargs =
             in
             movable, defer :: flags
       in
+      (* Unification under local constraints depends on the order *)
       let has_function_literal =
         List.exists (function
             | _, Arg (Known_arg { sarg = { pexp_desc = Pexp_function _ } }) ->
@@ -7171,7 +7239,8 @@ and type_application env app_loc funct sargs =
           args
       in
       let deferred =
-        if not has_function_literal then List.map (fun _ -> false) args
+        if not has_function_literal || Env.has_local_constraints env then
+          List.map (fun _ -> false) args
         else
           (* [is_independent_arg] expands types *)
           let snap = Btype.snapshot () in
