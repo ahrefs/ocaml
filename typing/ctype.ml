@@ -970,7 +970,7 @@ let rec update_level env level expand ty =
         let needs_expand = expand || needs_expand env level p tl in
         (* Do not lower the level of nodes that may be unrelated *)
         begin try
-          if not needs_expand then raise Cannot_expand;
+          if not needs_expand then raise_notrace Cannot_expand;
           let ty' = !forward_try_expand_safe env ty in
           link_type ty ty';
           update_level env level expand ty
@@ -2033,7 +2033,7 @@ let expand_abbrev_gen ~link kind find_type_expansion env ty =
       | exception Not_found ->
           (* another way to expand is to normalize the path itself *)
           begin match Env.try_normalize_type_path None env path with
-          | None -> raise Cannot_expand
+          | None -> raise_notrace Cannot_expand
           | Some path' -> newty3 ~level ~scope (Tconstr (path', args, abbrev))
           end
       | (params, body, expansion_scope) ->
@@ -2089,14 +2089,14 @@ let safe_abbrev env ty =
 let try_expand_once ~link env ty =
   match get_desc ty with
     Tconstr _ -> expand_abbrev ~link env ty
-  | _ -> raise Cannot_expand
+  | _ -> raise_notrace Cannot_expand
 
 (* This one only raises Cannot_expand *)
 let try_expand_safe ~link env ty =
   let snap = Btype.snapshot () in
   try try_expand_once ~link env ty
   with Escape _ ->
-    Btype.backtrack snap; cleanup_abbrev_memo (); raise Cannot_expand
+    Btype.backtrack snap; cleanup_abbrev_memo (); raise_notrace Cannot_expand
 
 (* Fully expand the head of a type. *)
 let rec try_expand_head
@@ -2182,19 +2182,19 @@ let safe_abbrev_opt env ty =
 let try_expand_once_opt env ty =
   match get_desc ty with
     Tconstr _ -> expand_abbrev_opt env ty
-  | _ -> raise Cannot_expand
+  | _ -> raise_notrace Cannot_expand
 
 let try_expand_once_gen_nolink ~find_type_expansion env ty =
   match get_desc ty with
     Tconstr _ ->
       expand_abbrev_gen ~link:false Private find_type_expansion env ty
-  | _ -> raise Cannot_expand
+  | _ -> raise_notrace Cannot_expand
 
 let try_expand_safe_opt env ty =
   let snap = Btype.snapshot () in
   try try_expand_once_opt env ty
   with Escape _ ->
-    Btype.backtrack snap; raise Cannot_expand
+    Btype.backtrack snap; raise_notrace Cannot_expand
 
 let expand_head_opt env ty =
   try try_expand_head try_expand_safe_opt env ty with Cannot_expand -> ty
@@ -3446,7 +3446,7 @@ and unify2_rec uenv t1 t2 =
       then unify2_rec uenv t1 (try_expand_safe env t2)
       else unify2_rec uenv (try_expand_safe env t1) t2
   | _ ->
-      raise Cannot_expand
+      raise_notrace Cannot_expand
   with Cannot_expand ->
     unify2_expand uenv t1 t2
 
