@@ -42,8 +42,8 @@ let interfaces = ref ([] : string list)
 
 module Cmx_consistbl = Consistbl.Make (Misc.Stdlib.String)
 let crc_implementations = Cmx_consistbl.create ()
-let implementations = ref ([] : string list)
-let cmx_required = ref ([] : string list)
+let implementations = ref String.Set.empty
+let cmx_required = ref String.Set.empty
 
 let check_consistency file_name unit crc =
   begin try
@@ -64,10 +64,10 @@ let check_consistency file_name unit crc =
   begin try
     List.iter
       (fun (name, crco) ->
-        implementations := name :: !implementations;
+        implementations := String.Set.add name !implementations;
         match crco with
             None ->
-              if List.mem name !cmx_required then
+              if String.Set.mem name !cmx_required then
                 raise(Error(Missing_cmx(file_name, name)))
           | Some crc ->
               Cmx_consistbl.check crc_implementations name crc file_name)
@@ -79,15 +79,16 @@ let check_consistency file_name unit crc =
     } ->
     raise(Error(Inconsistent_implementation(name, user, auth)))
   end;
-  implementations := unit.ui_name :: !implementations;
+  implementations := String.Set.add unit.ui_name !implementations;
   Cmx_consistbl.check crc_implementations unit.ui_name crc file_name;
   if unit.ui_symbol <> unit.ui_name then
-    cmx_required := unit.ui_name :: !cmx_required
+    cmx_required := String.Set.add unit.ui_name !cmx_required
 
 let extract_crc_interfaces () =
   Cmi_consistbl.extract !interfaces crc_interfaces
 let extract_crc_implementations () =
-  Cmx_consistbl.extract !implementations crc_implementations
+  Cmx_consistbl.extract (String.Set.elements !implementations)
+    crc_implementations
 
 (* Add C objects and options and "custom" info from a library descriptor.
    See bytecomp/bytelink.ml for comments on the order of C objects. *)
@@ -427,8 +428,8 @@ let report_error = Format_doc.compat report_error_doc
 let reset () =
   Cmi_consistbl.clear crc_interfaces;
   Cmx_consistbl.clear crc_implementations;
-  cmx_required := [];
+  cmx_required := String.Set.empty;
   interfaces := [];
-  implementations := [];
+  implementations := String.Set.empty;
   lib_ccobjs := [];
   lib_ccopts := []
