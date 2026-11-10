@@ -20,8 +20,10 @@ val command_line_options : (string * Arg.spec * string) list
 
 (* Specific operations for the AMD64 processor *)
 
+type sym_global = Global | Local    (* See [Cmm.is_global] *)
+
 type addressing_mode =
-    Ibased of string * int              (* symbol + displ *)
+    Ibased of string * sym_global * int (* symbol + displ *)
   | Iindexed of int                     (* reg + displ *)
   | Iindexed2 of int                    (* reg + reg + displ *)
   | Iscaled of int * int                (* reg * scale + displ *)

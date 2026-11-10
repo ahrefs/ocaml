@@ -33,7 +33,7 @@ exception Error of error
 let cmm_invariants ppf fd_cmm =
   let print_fundecl =
     if !Clflags.dump_cmm then Printcmm.fundecl
-    else fun ppf fdecl -> Format.fprintf ppf "%s" fdecl.fun_name
+    else fun ppf fdecl -> Format.fprintf ppf "%s" fdecl.fun_name.sym_name
   in
   if !Clflags.cmm_invariants && Cmm_invariants.run ppf fd_cmm then
     Misc.fatal_errorf "Cmm invariants failed on following fundecl:@.%a@."
@@ -175,7 +175,7 @@ let compile_phrases ~ppf_dump ps =
   let funcnames =
     List.fold_left (fun s p ->
         match p with
-        | Cfunction fd -> String.Set.add fd.fun_name s
+        | Cfunction fd -> String.Set.add fd.fun_name.sym_name s
         | Cdata _ -> s)
       String.Set.empty ps
   in
@@ -187,7 +187,8 @@ let compile_phrases ~ppf_dump ps =
        match p with
        | Cfunction fd ->
           compile_fundecl ~ppf_dump ~funcnames fd;
-          compile ~funcnames:(String.Set.remove fd.fun_name funcnames) ps
+          compile
+            ~funcnames:(String.Set.remove fd.fun_name.sym_name funcnames) ps
        | Cdata dl ->
           compile_data dl;
           compile ~funcnames ps
@@ -202,10 +203,12 @@ let compile_phrase ~ppf_dump p =
 let compile_genfuns ~ppf_dump f =
   List.iter
     (function
-       | (Cfunction {fun_name = name}) as ph when f name ->
+       | (Cfunction {fun_name = name}) as ph when f name.sym_name ->
            compile_phrase ~ppf_dump ph
        | _ -> ())
-    (Cmm_helpers.generic_functions true [Compilenv.current_unit_infos ()])
+    (let tbl = Cmm_helpers.Generic_fns_tbl.make () in
+     Cmm_helpers.Generic_fns_tbl.add_unit tbl (Compilenv.current_unit_infos ());
+     Cmm_helpers.generic_functions true tbl)
 
 let compile_unit ~output_prefix ~asm_filename ~keep_asm ~obj_filename gen =
   reset ();

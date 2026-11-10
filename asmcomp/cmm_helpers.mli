@@ -569,7 +569,7 @@ val strmatch_compile :
 val ptr_offset : expression -> int -> Debuginfo.t -> expression
 
 (** Direct application of a function via a symbol *)
-val direct_apply : string -> expression list -> Debuginfo.t -> expression
+val direct_apply : symbol -> expression list -> Debuginfo.t -> expression
 
 (** Generic application of a function to one or several arguments.
     The mutable_flag argument annotates the loading of the code pointer
@@ -593,8 +593,17 @@ val send :
 
 (** Generic Cmm fragments *)
 
+(** Sets of generic functions needed by a set of units *)
+module Generic_fns_tbl : sig
+  type t
+  val make : unit -> t
+  val add : t -> Cmx_format.generic_fns -> unit
+  val add_unit : t -> Cmx_format.unit_infos -> unit
+  val entries : t -> Cmx_format.generic_fns
+end
+
 (** Generate generic functions *)
-val generic_functions : bool -> Cmx_format.unit_infos list -> Cmm.phrase list
+val generic_functions : bool -> Generic_fns_tbl.t -> Cmm.phrase list
 
 val placeholder_dbg : unit -> Debuginfo.t
 val placeholder_fun_dbg : human_name:string -> Debuginfo.t
@@ -631,45 +640,45 @@ val predef_exception: int -> string -> phrase
 (** Generate data for a global string constant *)
 val emit_global_string_constant: string -> string -> phrase
 
-val plugin_header: (Cmx_format.unit_infos * Digest.BLAKE128.t) list -> phrase
+val plugin_header: Cmxs_format.dynunit list -> phrase
 
 (** Emit constant symbols *)
 
 (** Produce the data_item list corresponding to a symbol definition *)
-val cdefine_symbol : (string * Cmmgen_state.is_global) -> data_item list
+val cdefine_symbol : symbol -> data_item list
 
 (** [emit_block symb white_header cont] prepends to [cont] the header and symbol
     for the block.
     [cont] must already contain the fields of the block (and may contain
     additional data items afterwards). *)
 val emit_block :
-  (string * Cmmgen_state.is_global) -> nativeint -> data_item list ->
+  symbol -> nativeint -> data_item list ->
   data_item list
 
 (** Emit specific kinds of constant blocks as data items *)
 val emit_float_constant :
-  (string * Cmmgen_state.is_global) -> float -> data_item list ->
+  symbol -> float -> data_item list ->
   data_item list
 val emit_string_constant :
-  (string * Cmmgen_state.is_global) -> string -> data_item list ->
+  symbol -> string -> data_item list ->
   data_item list
 val emit_int32_constant :
-  (string * Cmmgen_state.is_global) -> int32 -> data_item list ->
+  symbol -> int32 -> data_item list ->
   data_item list
 val emit_int64_constant :
-  (string * Cmmgen_state.is_global) -> int64 -> data_item list ->
+  symbol -> int64 -> data_item list ->
   data_item list
 val emit_nativeint_constant :
-  (string * Cmmgen_state.is_global) -> nativeint -> data_item list ->
+  symbol -> nativeint -> data_item list ->
   data_item list
 val emit_float_array_constant :
-  (string * Cmmgen_state.is_global) -> float list -> data_item list ->
+  symbol -> float list -> data_item list ->
   data_item list
 
 val fundecls_size : Clambda.ufunction list -> int
 
 val emit_constant_closure :
-  (string * Cmmgen_state.is_global) -> Clambda.ufunction list ->
+  symbol -> Clambda.ufunction list ->
   data_item list -> data_item list -> data_item list
 
 val emit_preallocated_blocks :

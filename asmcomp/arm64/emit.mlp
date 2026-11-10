@@ -115,8 +115,25 @@ let emit_stack env r =
 
 (* Output an addressing mode *)
 
-let emit_symbol_offset s ofs =
-  emit_symbol s;
+(* Symbols that are [Local] in the sense of [Cmm.is_global] are emitted as
+   assembler-local labels, so that references to them are resolved by the
+   assembler and they do not appear in the symbol table of the object file.
+   [Global] symbols defined in the current file are given such a label too,
+   so that they can be referred to locally. *)
+
+let emit_local_symbol s =
+  emit_string label_prefix; emit_symbol s
+
+let emit_cmm_symbol (s : Cmm.symbol) =
+  match s.sym_global with
+  | Global -> emit_symbol s.sym_name
+  | Local -> emit_local_symbol s.sym_name
+
+let emit_symbol_offset (s, glob) ofs =
+  begin match (glob : Arch.sym_global) with
+  | Global -> emit_symbol s
+  | Local -> emit_local_symbol s
+  end;
   if ofs > 0 then `+{emit_int ofs}`
   else if ofs < 0 then `-{emit_int (-ofs)}`
   else ()
@@ -125,9 +142,9 @@ let emit_addressing addr r =
   match addr with
   | Iindexed ofs ->
       `[{emit_reg r}, #{emit_int ofs}]`
-  | Ibased(s, ofs) ->
+  | Ibased(s, glob, ofs) ->
       assert (not !Clflags.dlcode);  (* see selection.ml *)
-      `[{emit_reg r}, #:lo12:{emit_symbol_offset s ofs}]`
+      `[{emit_reg r}, #:lo12:{emit_symbol_offset (s, glob) ofs}]`
 
 (* Record live pointers at call points *)
 
@@ -343,6 +360,19 @@ let emit_load_symbol_addr dst s =
     `	ldr	{emit_reg dst}, [{emit_reg dst}, #:got_lo12:{emit_symbol s}]\n`
   end
 
+let emit_load_cmm_symbol_addr dst (s : Cmm.symbol) =
+  match s.sym_global with
+  | Local ->
+      if macosx then begin
+        `	adrp	{emit_reg dst}, {emit_local_symbol s.sym_name}@PAGE\n`;
+        `	add	{emit_reg dst}, {emit_reg dst}, {emit_local_symbol s.sym_name}@PAGEOFF\n`
+      end else begin
+        `	adrp	{emit_reg dst}, {emit_local_symbol s.sym_name}\n`;
+        `	add	{emit_reg dst}, {emit_reg dst}, #:lo12:{emit_local_symbol s.sym_name}\n`
+      end
+  | Global ->
+      emit_load_symbol_addr dst s.sym_name
+
 (* The following functions are used for calculating the sizes of the
    call GC and bounds check points emitted out-of-line from the function
    body.  See branch_relaxation.mli. *)
@@ -469,7 +499,7 @@ module Size = struct
     | Lop (Icall_imm _) -> 1
     | Lop (Itailcall_ind) -> epilogue_size f
     | Lop (Itailcall_imm { func; _ }) ->
-      if func = f.fun_name then 1 else epilogue_size f
+      if func.sym_name = f.fun_name then 1 else epilogue_size f
     | Lop (Iextcall {alloc; stack_ofs} ) ->
       if stack_ofs > 0 then 5
       else if alloc then 3
@@ -717,10 +747,10 @@ let emit_stlr src base addr =
   | Iindexed ofs ->
       emit_addimm reg_tmp1 base ofs;
       `	stlr	{emit_reg src}, [{emit_reg reg_tmp1}]\n`
-  | Ibased(s, ofs) ->
+  | Ibased(s, glob, ofs) ->
       assert (not !Clflags.dlcode);  (* see selection.ml *)
       (* [base] contains the high bits of [s + ofs], produced by [adrp] *)
-      `	add	{emit_reg reg_tmp1}, {emit_reg base}, #:lo12:{emit_symbol_offset s ofs}\n`;
+      `	add	{emit_reg reg_tmp1}, {emit_reg base}, #:lo12:{emit_symbol_offset (s, glob) ofs}\n`;
       `	stlr	{emit_reg src}, [{emit_reg reg_tmp1}]\n`
 
 (* Output a store of register [src] at address [base + addr], including
@@ -806,20 +836,20 @@ let emit_instr env i =
           emit_load_literal i.res.(0) lbl
         end
     | Lop(Iconst_symbol s) ->
-        emit_load_symbol_addr i.res.(0) s
+        emit_load_cmm_symbol_addr i.res.(0) s
     | Lop(Icall_ind) ->
         `	blr	{emit_reg i.arg.(0)}\n`;
         `{record_frame env i.live (Dbg_other i.dbg)}\n`
     | Lop(Icall_imm { func; }) ->
-        `	bl	{emit_symbol func}\n`;
+        `	bl	{emit_cmm_symbol func}\n`;
         `{record_frame env i.live (Dbg_other i.dbg)}\n`
     | Lop(Itailcall_ind) ->
         output_epilogue env (fun () -> `	br	{emit_reg i.arg.(0)}\n`)
     | Lop(Itailcall_imm { func; }) ->
-        if func = env.f.fun_name then
+        if func.sym_name = env.f.fun_name then
           `	b	{emit_label env.f.fun_tailrec_entry_point_label}\n`
         else
-          output_epilogue env (fun () -> `	b	{emit_symbol func}\n`)
+          output_epilogue env (fun () -> `	b	{emit_cmm_symbol func}\n`)
     | Lop(Iextcall {func; alloc; stack_ofs}) ->
         if stack_ofs > 0 then begin
           `	mov	{emit_reg reg_stack_arg_begin}, sp\n`;
@@ -853,9 +883,9 @@ let emit_instr env i =
         let base =
           match addressing_mode with
           | Iindexed _ -> i.arg.(0)
-          | Ibased(s, ofs) ->
+          | Ibased(s, glob, ofs) ->
               assert (not !Clflags.dlcode);  (* see selection.ml *)
-              `	adrp	{emit_reg reg_tmp1}, {emit_symbol_offset s ofs}\n`;
+              `	adrp	{emit_reg reg_tmp1}, {emit_symbol_offset (s, glob) ofs}\n`;
               reg_tmp1 in
         begin match memory_chunk with
         | Byte_unsigned ->
@@ -891,9 +921,9 @@ let emit_instr env i =
         let base =
           match addr with
           | Iindexed _ -> i.arg.(1)
-          | Ibased(s, ofs) ->
+          | Ibased(s, glob, ofs) ->
               assert (not !Clflags.dlcode);
-              `	adrp	{emit_reg reg_tmp1}, {emit_symbol_offset s ofs}\n`;
+              `	adrp	{emit_reg reg_tmp1}, {emit_symbol_offset (s, glob) ofs}\n`;
               reg_tmp1 in
         begin match size with
         | Byte_unsigned | Byte_signed ->
@@ -1284,6 +1314,7 @@ let fundecl fundecl =
     end else
       None, 0 in
   `{emit_symbol fundecl.fun_name}:\n`;
+  `{emit_local_symbol fundecl.fun_name}:\n`;
   emit_debug_info fundecl.fun_dbg;
   cfi_startproc();
   begin match handle_overflow with
@@ -1321,23 +1352,21 @@ let fundecl fundecl =
 (* Emission of data *)
 
 let emit_item = function
-  | Cglobal_symbol s -> `	.globl	{emit_symbol s}\n`;
-  | Cdefine_symbol s ->
-    if !Clflags.dlcode then begin
-      (* GOT relocations against non-global symbols don't seem to work
-         properly: GOT entries are not created for the symbols and the
-         relocations evaluate to random other GOT entries.  For the moment
-         force all symbols to be global. *)
-      `	.globl	{emit_symbol s}\n`;
-    end;
-    `{emit_symbol s}:\n`
+  | Cdefine_symbol { sym_name; sym_global = Local } ->
+    (* Local symbols are only referred to with PC-relative addressing, never
+       through the GOT. *)
+    `{emit_local_symbol sym_name}:\n`
+  | Cdefine_symbol { sym_name; sym_global = Global } ->
+    `	.globl	{emit_symbol sym_name}\n`;
+    `{emit_symbol sym_name}:\n`;
+    `{emit_local_symbol sym_name}:\n`
   | Cint8 n -> `	.byte	{emit_int n}\n`
   | Cint16 n -> `	.short	{emit_int n}\n`
   | Cint32 n -> `	.long	{emit_nativeint n}\n`
   | Cint n -> `	.quad	{emit_nativeint n}\n`
   | Csingle f -> emit_float32_directive ".long" (Int32.bits_of_float f)
   | Cdouble f -> emit_float64_directive ".quad" (Int64.bits_of_float f)
-  | Csymbol_address s -> `	.quad	{emit_symbol s}\n`
+  | Csymbol_address s -> `	.quad	{emit_cmm_symbol s}\n`
   | Cstring s -> emit_string_directive "	.ascii  " s
   | Cskip n -> if n > 0 then `	.space	{emit_int n}\n`
   | Calign n -> `	.align	{emit_int(Misc.log2 n)}\n`
