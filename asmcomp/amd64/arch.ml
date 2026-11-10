@@ -26,8 +26,10 @@ let command_line_options =
 
 open Format
 
+type sym_global = Global | Local    (* See [Cmm.is_global] *)
+
 type addressing_mode =
-    Ibased of string * int              (* symbol + displ *)
+    Ibased of string * sym_global * int (* symbol + displ *)
   | Iindexed of int                     (* reg + displ *)
   | Iindexed2 of int                    (* reg + reg + displ *)
   | Iscaled of int * int                (* reg * scale + displ *)
@@ -71,7 +73,7 @@ let identity_addressing = Iindexed 0
 
 let offset_addressing addr delta =
   match addr with
-    Ibased(s, n) -> Ibased(s, n + delta)
+    Ibased(s, glob, n) -> Ibased(s, glob, n + delta)
   | Iindexed n -> Iindexed(n + delta)
   | Iindexed2 n -> Iindexed2(n + delta)
   | Iscaled(scale, n) -> Iscaled(scale, n + delta)
@@ -81,9 +83,9 @@ let offset_addressing addr delta =
 
 let print_addressing printreg addr ppf arg =
   match addr with
-  | Ibased(s, 0) ->
+  | Ibased(s, _, 0) ->
       fprintf ppf "\"%s\"" s
-  | Ibased(s, n) ->
+  | Ibased(s, _, n) ->
       fprintf ppf "\"%s\" + %i" s n
   | Iindexed n ->
       let idx = if n <> 0 then Printf.sprintf " + %i" n else "" in

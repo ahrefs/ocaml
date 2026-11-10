@@ -287,7 +287,7 @@ let scan_file ldeps genfns file tolink = match file with
 
 let force_linking_of_startup ~ppf_dump =
   Asmgen.compile_phrase ~ppf_dump
-    (Cmm.Cdata ([Cmm.Csymbol_address "caml_startup"]))
+    (Cmm.Cdata ([Cmm.Csymbol_address (Cmm.global_symbol "caml_startup")]))
 
 let make_globals_map units_list ~crc_interfaces =
   let crc_interfaces = String.Tbl.of_seq (List.to_seq crc_interfaces) in

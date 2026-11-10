@@ -29,7 +29,7 @@ type addressing_expr =
 
 let rec select_addr = function
     Cconst_symbol (s, _) ->
-      (Asymbol s, 0, Debuginfo.none)
+      (Asymbol s.sym_name, 0, Debuginfo.none)
   | Cop((Caddi | Caddv | Cadda), [arg; Cconst_int (m, _)], dbg) ->
       let (a, n, _) = select_addr arg in (a, n + m, dbg)
   | Cop((Caddi | Caddv | Cadda), [Cconst_int (m, _); arg], dbg) ->

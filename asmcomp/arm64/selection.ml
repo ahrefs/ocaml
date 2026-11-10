@@ -54,6 +54,9 @@ let inline_ops =
 let use_direct_addressing _symb =
   (not !Clflags.dlcode) && (not Arch.macosx)
 
+let sym_global (symb : Cmm.symbol) : Arch.sym_global =
+  match symb.sym_global with Global -> Global | Local -> Local
+
 let is_stack_slot rv =
   Reg.(match rv with
         | [| { loc = Stack _ } |] -> true
@@ -90,7 +93,7 @@ method! effects_of e =
 method select_addressing chunk = function
   | Cop((Caddv | Cadda), [Cconst_symbol (s, _); Cconst_int (n, _)], _)
     when use_direct_addressing s ->
-      (Ibased(s, n), Ctuple [])
+      (Ibased(s.sym_name, sym_global s, n), Ctuple [])
   | Cop((Caddv | Cadda), [arg; Cconst_int (n, _)], _)
     when is_offset chunk n ->
       (Iindexed n, arg)
@@ -100,7 +103,7 @@ method select_addressing chunk = function
       (Iindexed n, Cop(op, [arg1; arg2], dbg))
   | Cconst_symbol (s, _)
     when use_direct_addressing s ->
-      (Ibased(s, 0), Ctuple [])
+      (Ibased(s.sym_name, sym_global s, 0), Ctuple [])
   | arg ->
       (Iindexed 0, arg)
 

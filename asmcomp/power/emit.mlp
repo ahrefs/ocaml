@@ -434,7 +434,7 @@ module BR = Branch_relaxation.Make (struct
     | Lop(Icall_ind) -> 4
     | Lop(Icall_imm _) -> 3
     | Lop(Itailcall_ind) -> 6
-    | Lop(Itailcall_imm { func; _ }) ->
+    | Lop(Itailcall_imm { func = { sym_name = func; _ }; _ }) ->
         if func = f.fun_name
         then 1
         else 6 + tocload_size
@@ -654,7 +654,7 @@ let emit_instr env i =
         let lbl = label_for_tocref entry in
         `	addis	11, 2, {emit_label lbl}@toc@ha\n`;
         `	lfd	{emit_reg i.res.(0)}, {emit_label lbl}@toc@l(11) # {emit_tocentry entry}\n`
-    | Lop(Iconst_symbol s) ->
+    | Lop(Iconst_symbol { sym_name = s; _ }) ->
         emit_tocload emit_reg i.res.(0) (TocSym s)
     | Lop(Icall_ind) ->
         `	mtctr	{emit_reg i.arg.(0)}\n`;
@@ -662,7 +662,7 @@ let emit_instr env i =
         `	bctrl\n`;
         record_frame env i.live (Dbg_other i.dbg);
         emit_reload_toc env
-    | Lop(Icall_imm { func; }) ->
+    | Lop(Icall_imm { func = { sym_name = func; _ }; }) ->
         (* For PPC64, we cannot just emit a "bl s; nop" sequence, because
            of the following scenario:
               - current function f1 calls f2 that has the same TOC
@@ -693,7 +693,7 @@ let emit_instr env i =
         end;
         emit_free_frame env;
         `	bctr\n`
-    | Lop(Itailcall_imm { func; }) ->
+    | Lop(Itailcall_imm { func = { sym_name = func; _ }; }) ->
         if func = env.f.fun_name then
           `	b	{emit_label env.f.fun_tailrec_entry_point_label}\n`
         else begin
@@ -1086,9 +1086,10 @@ let declare_global_data s =
   emit_type_directive s "@object"
 
 let emit_item = function
-    Cglobal_symbol s ->
-      declare_global_data s
-  | Cdefine_symbol s ->
+    Cdefine_symbol { sym_name = s; sym_global = Global } ->
+      declare_global_data s;
+      `{emit_symbol s}:\n`;
+  | Cdefine_symbol { sym_name = s; sym_global = Local } ->
       `{emit_symbol s}:\n`;
   | Cint8 n ->
       `	.byte	{emit_int n}\n`
@@ -1102,7 +1103,7 @@ let emit_item = function
       emit_float32_directive ".long" (Int32.bits_of_float f)
   | Cdouble f ->
       emit_float64_directive ".quad" (Int64.bits_of_float f)
-  | Csymbol_address s ->
+  | Csymbol_address { sym_name = s; _ } ->
       `	.quad	{emit_symbol s}\n`
   | Cstring s ->
       emit_bytes_directive "	.byte	" s

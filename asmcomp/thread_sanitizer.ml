@@ -253,7 +253,9 @@ let instrument body =
           Csequence
             (Cmm_helpers.return_unit dbg_none
                (Cop (Capply typ_int,
-                     [Cconst_symbol ("caml_tsan_exit_on_raise_asm", dbg_none);
+                     [Cconst_symbol
+                        (global_symbol "caml_tsan_exit_on_raise_asm",
+                         dbg_none);
                       Cconst_int (0, dbg_none)],
                      dbg_none)),
              Cop (Craise kind, [arg_exp], dbg)))

@@ -28,9 +28,11 @@ val command_line_options : (string * Arg.spec * string) list
 
 (* Addressing modes *)
 
+type sym_global = Global | Local    (* See [Cmm.is_global] *)
+
 type addressing_mode =
   | Iindexed of int                     (* reg + displ *)
-  | Ibased of string * int              (* global var + displ *)
+  | Ibased of string * sym_global * int (* global var + displ *)
 
 (* We do not support the reg + shifted reg addressing mode, because
    what we really need is reg + shifted reg + displ,

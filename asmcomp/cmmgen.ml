@@ -142,14 +142,28 @@ let get_field env imm_or_pointer mut ptr n dbg =
 
 (* Translate structured constants to Cmm data items *)
 
+let local_const_symbol () =
+  { sym_name = Compilenv.new_const_symbol (); sym_global = Local }
+
+(* Functions defined in the current compilation unit can be referred to
+   with local symbols *)
+let local_function_symbol sym_name = { sym_name; sym_global = Local }
+
+(* Structured constants defined in the current compilation unit can be
+   referred to with local symbols *)
+let const_symbol sym_name =
+  match Cmmgen_state.get_structured_constant sym_name with
+  | None -> global_symbol sym_name
+  | Some (sym_global, _) -> { sym_name; sym_global }
+
 let transl_constant dbg = function
   | Uconst_int n ->
       int_const dbg n
   | Uconst_ref (label, def_opt) ->
       Option.iter
-        (fun def -> Cmmgen_state.add_structured_constant label def)
+        (fun def -> Cmmgen_state.add_global_structured_constant label def)
         def_opt;
-      Cconst_symbol (label, dbg)
+      Cconst_symbol (const_symbol label, dbg)
 
 let emit_constant cst cont =
   match cst with
@@ -157,9 +171,9 @@ let emit_constant cst cont =
       cint_const n
       :: cont
   | Uconst_ref (sym, _) ->
-      Csymbol_address sym :: cont
+      Csymbol_address (const_symbol sym) :: cont
 
-let emit_structured_constant ((_sym, is_global) as symb) cst cont =
+let emit_structured_constant symb cst cont =
   match cst with
   | Uconst_float s ->
       emit_float_constant symb s cont
@@ -177,7 +191,8 @@ let emit_structured_constant ((_sym, is_global) as symb) cst cont =
   | Uconst_float_array fields ->
       emit_float_array_constant symb fields cont
   | Uconst_closure(fundecls, lbl, fv) ->
-      Cmmgen_state.add_constant lbl (Const_closure (is_global, fundecls, fv));
+      Cmmgen_state.add_constant lbl
+        (Const_closure (symb.sym_global, fundecls, fv));
       List.iter (fun f -> Cmmgen_state.add_function f) fundecls;
       cont
 
@@ -186,23 +201,23 @@ let emit_structured_constant ((_sym, is_global) as symb) cst cont =
 let box_int_constant sym bi n =
   match bi with
     Pnativeint ->
-      emit_nativeint_constant (sym, Local) n []
+      emit_nativeint_constant sym n []
   | Pint32 ->
       let n = Nativeint.to_int32 n in
-      emit_int32_constant (sym, Local) n []
+      emit_int32_constant sym n []
   | Pint64 ->
       let n = Int64.of_nativeint n in
-      emit_int64_constant (sym, Local) n []
+      emit_int64_constant sym n []
 
 let box_int dbg bi arg =
   match arg with
   | Cconst_int (n, _) ->
-      let sym = Compilenv.new_const_symbol () in
+      let sym = local_const_symbol () in
       let data_items = box_int_constant sym bi (Nativeint.of_int n) in
       Cmmgen_state.add_data_items data_items;
       Cconst_symbol (sym, dbg)
   | Cconst_natint (n, _) ->
-      let sym = Compilenv.new_const_symbol () in
+      let sym = local_const_symbol () in
       let data_items = box_int_constant sym bi n in
       Cmmgen_state.add_data_items data_items;
       Cconst_symbol (sym, dbg)
@@ -314,23 +329,23 @@ let is_unboxed_number_cmm ~strict ~kind cmm =
         notify (Boxed (Boxed_float dbg, false))
     | Cop(Calloc, [Cconst_natint (hdr, _); Cconst_symbol (ops, _); _], dbg) ->
         if Nativeint.equal hdr boxedintnat_header
-        && String.equal ops caml_nativeint_ops
+        && String.equal ops.sym_name caml_nativeint_ops
         then
           notify (Boxed (Boxed_integer (Pnativeint, dbg), false))
         else
         if Nativeint.equal hdr boxedint32_header
-        && String.equal ops caml_int32_ops
+        && String.equal ops.sym_name caml_int32_ops
         then
           notify (Boxed (Boxed_integer (Pint32, dbg), false))
         else
         if Nativeint.equal hdr boxedint64_header
-        && String.equal ops caml_int64_ops
+        && String.equal ops.sym_name caml_int64_ops
         then
           notify (Boxed (Boxed_integer (Pint64, dbg), false))
         else
           notify No_unboxing
     | Cconst_symbol (s, _) ->
-        begin match Cmmgen_state.structured_constant_of_sym s with
+        begin match Cmmgen_state.structured_constant_of_sym s.sym_name with
         | Some (Uconst_float _) ->
             notify (Boxed (Boxed_float Debuginfo.none, true))
         | Some (Uconst_nativeint _) ->
@@ -379,8 +394,9 @@ let rec transl env e =
   | Uconst sc ->
       transl_constant Debuginfo.none sc
   | Uclosure(fundecls, []) ->
-      let sym = Compilenv.new_const_symbol() in
-      Cmmgen_state.add_constant sym (Const_closure (Local, fundecls, []));
+      let sym = local_const_symbol () in
+      Cmmgen_state.add_constant sym.sym_name
+        (Const_closure (Local, fundecls, []));
       List.iter (fun f -> Cmmgen_state.add_function f) fundecls;
       let dbg =
         match fundecls with
@@ -398,15 +414,16 @@ let rec transl env e =
             let dbg = f.dbg in
             let without_header =
               if f.arity = 1 || f.arity = 0 then
-                Cconst_symbol (f.label, dbg) ::
+                Cconst_symbol (local_function_symbol f.label, dbg) ::
                 alloc_closure_info ~arity:f.arity
                                    ~startenv:(startenv - pos) dbg ::
                 transl_fundecls (pos + 3) rem
               else
-                Cconst_symbol (curry_function_sym f.arity, dbg) ::
+                Cconst_symbol
+                  (global_symbol (curry_function_sym f.arity), dbg) ::
                 alloc_closure_info ~arity:f.arity
                                    ~startenv:(startenv - pos) dbg ::
-                Cconst_symbol (f.label, dbg) ::
+                Cconst_symbol (local_function_symbol f.label, dbg) ::
                 transl_fundecls (pos + 4) rem
             in
             if pos = 0
@@ -433,7 +450,11 @@ let rec transl env e =
       ptr_offset ptr offset dbg
   | Udirect_apply(lbl, args, dbg) ->
       let args = List.map (transl env) args in
-      direct_apply lbl args dbg
+      let sym =
+        if Cmmgen_state.is_local_function lbl then local_function_symbol lbl
+        else global_symbol lbl
+      in
+      direct_apply sym args dbg
   | Ugeneric_apply(clos, args, dbg) ->
       let clos = transl env clos in
       let args = List.map (transl env) args in
@@ -474,7 +495,7 @@ let rec transl env e =
   | Uprim(prim, args, dbg) ->
       begin match (simplif_primitive prim, args) with
       | (Pread_symbol sym, []) ->
-          Cconst_symbol (sym, dbg)
+          Cconst_symbol (global_symbol sym, dbg)
       | (Pmakeblock _, []) ->
           assert false
       | (Pmakeblock(tag, _mut, _kind), args) ->
@@ -893,7 +914,8 @@ and transl_prim_1 env p arg dbg =
         make_alloc dbg Obj.cont_tag [int_const dbg 0; int_const dbg 0]
       in
       Cop(Capply typ_val,
-       [Cconst_symbol ("caml_perform", dbg); transl env arg; cont],
+       [Cconst_symbol (global_symbol "caml_perform", dbg);
+        transl env arg; cont],
        dbg)
   | Pdls_get ->
       Cop(Cdls_get, [transl env arg], dbg)
@@ -1150,13 +1172,13 @@ and transl_prim_3 env p arg1 arg2 arg3 dbg =
 
   | Prunstack ->
       Cop (Capply typ_val,
-           [Cconst_symbol ("caml_runstack", dbg);
+           [Cconst_symbol (global_symbol "caml_runstack", dbg);
            transl env arg1; transl env arg2; transl env arg3],
            dbg)
 
   | Preperform ->
       Cop (Capply typ_val,
-           [Cconst_symbol ("caml_reperform", dbg);
+           [Cconst_symbol (global_symbol "caml_reperform", dbg);
            transl env arg1; transl env arg2; transl env arg3],
            dbg)
 
@@ -1187,7 +1209,7 @@ and transl_prim_4 env p arg1 arg2 arg3 arg4 dbg =
   match p with
   | Presume ->
       Cop (Capply typ_val,
-           [Cconst_symbol ("caml_resume", dbg);
+           [Cconst_symbol (global_symbol "caml_resume", dbg);
            transl env arg1; transl env arg2;
            transl env arg3; transl env arg4],
            dbg)
@@ -1465,7 +1487,7 @@ let transl_function f =
         (id, machtype_of_value_kind value_kind))
       f.params
   in
-  Cfunction {fun_name = f.label;
+  Cfunction {fun_name = global_symbol f.label;
              fun_args;
              fun_body = cmm_body;
              fun_codegen_options;
@@ -1498,31 +1520,30 @@ let emit_constant_table symb elems =
 let transl_clambda_constants (constants : Clambda.preallocated_constant list)
       cont =
   let c = ref cont in
-  let emit_clambda_constant symbol global cst =
-     let cst = emit_structured_constant (symbol, global) cst [] in
+  let emit_clambda_constant symb cst =
+     let cst = emit_structured_constant symb cst [] in
      c := (Cdata cst) :: !c
   in
   List.iter
     (fun { symbol; exported; definition = cst; provenance = _; } ->
-       let global : Cmmgen_state.is_global =
-         if exported then Global else Local
-       in
-       emit_clambda_constant symbol global cst)
+       let sym_global = if exported then Global else Local in
+       emit_clambda_constant { sym_name = symbol; sym_global } cst)
     constants;
   !c
 
 let emit_cmm_data_items_for_constants cont =
   let c = ref cont in
-  String.Map.iter (fun symbol (cst : Cmmgen_state.constant) ->
+  String.Map.iter (fun sym_name (cst : Cmmgen_state.constant) ->
       match cst with
-      | Const_closure (global, fundecls, clos_vars) ->
+      | Const_closure (sym_global, fundecls, clos_vars) ->
           let cmm =
-            emit_constant_closure (symbol, global) fundecls
+            emit_constant_closure { sym_name; sym_global } fundecls
               (List.fold_right emit_constant clos_vars []) []
           in
           c := (Cdata cmm) :: !c
-      | Const_table (global, elems) ->
-          c := (Cdata (emit_constant_table (symbol, global) elems)) :: !c)
+      | Const_table (sym_global, elems) ->
+          c := (Cdata (emit_constant_table { sym_name; sym_global } elems))
+               :: !c)
     (Cmmgen_state.get_and_clear_constants ());
   Cdata (Cmmgen_state.get_and_clear_data_items ()) :: !c
 
@@ -1552,7 +1573,8 @@ let transl_all_functions cont =
 let compunit (ulam, preallocated_blocks, constants) =
   assert (Cmmgen_state.no_more_functions ());
   let dbg = Debuginfo.none in
-  Cmmgen_state.set_structured_constants constants;
+  Cmmgen_state.set_local_structured_constants constants;
+  Cmmgen_state.clear_function_names ();
   let init_code =
     if !Clflags.afl_instrument then
       Afl_instrument.instrument_initialiser (transl empty_env ulam)
@@ -1563,7 +1585,8 @@ let compunit (ulam, preallocated_blocks, constants) =
     if Config.tsan then Thread_sanitizer.instrument init_code
     else init_code
   in
-  let c1 = [Cfunction {fun_name = Compilenv.make_symbol (Some "entry");
+  let c1 = [Cfunction {fun_name =
+                         global_symbol (Compilenv.make_symbol (Some "entry"));
                        fun_args = [];
                        fun_body = init_code;
                        (* This function is often large and run only once.
@@ -1579,6 +1602,6 @@ let compunit (ulam, preallocated_blocks, constants) =
                        fun_dbg  = Debuginfo.none }] in
   let c2 = transl_clambda_constants constants c1 in
   let c3 = transl_all_functions c2 in
-  Cmmgen_state.set_structured_constants [];
+  Cmmgen_state.set_local_structured_constants [];
   let c4 = emit_preallocated_blocks preallocated_blocks c3 in
   emit_cmm_data_items_for_constants c4

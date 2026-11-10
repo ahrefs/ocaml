@@ -98,6 +98,28 @@ val cur_label: unit -> label
 
 type rec_flag = Nonrecursive | Recursive
 
+type is_global = Global | Local
+
+(** Symbols are marked with whether they are local or global, at both
+    definition and use sites.
+
+    Symbols defined as [Local] may only be referenced from the same
+    file, and all such references must also be [Local].
+
+    Symbols defined as [Global] may be referenced from other files.
+    References from other files must be [Global], but references from
+    the same file may be [Local].
+
+    Marking symbols in this way speeds up linking, as references to
+    [Local] symbols can be resolved by the assembler, and [Local]
+    symbols do not need to appear in the symbol table of the object
+    file. Backends are free to treat all symbols as [Global]. *)
+type symbol =
+  { sym_name : string;
+    sym_global : is_global }
+
+val global_symbol : string -> symbol
+
 type phantom_defining_expr =
   (* CR-soon mshinwell: Convert this to [Targetint.OCaml.t] (or whatever the
      representation of "target-width OCaml integers of type [int]"
@@ -177,7 +199,7 @@ and expression =
     Cconst_int of int * Debuginfo.t
   | Cconst_natint of nativeint * Debuginfo.t
   | Cconst_float of float * Debuginfo.t
-  | Cconst_symbol of string * Debuginfo.t
+  | Cconst_symbol of symbol * Debuginfo.t
   | Cvar of Backend_var.t
   | Cvar_mut of Backend_var.t
   | Clet of Backend_var.With_provenance.t * expression * expression
@@ -209,7 +231,7 @@ type codegen_option =
   | No_CSE
 
 type fundecl =
-  { fun_name: string;
+  { fun_name: symbol;
     fun_args: (Backend_var.With_provenance.t * machtype) list;
     fun_body: expression;
     fun_codegen_options : codegen_option list;
@@ -218,15 +240,14 @@ type fundecl =
   }
 
 type data_item =
-    Cdefine_symbol of string
-  | Cglobal_symbol of string
+    Cdefine_symbol of symbol
   | Cint8 of int
   | Cint16 of int
   | Cint32 of nativeint
   | Cint of nativeint
   | Csingle of float
   | Cdouble of float
-  | Csymbol_address of string
+  | Csymbol_address of symbol
   | Cstring of string
   | Cskip of int
   | Calign of int
