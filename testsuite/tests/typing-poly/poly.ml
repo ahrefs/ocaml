@@ -806,7 +806,7 @@ class ['a] olist :
   end
 val sum : int #olist -> int = <fun>
 val count : 'a #olist -> int = <fun>
-val append : 'a #olist -> ('a #olist as 'b) -> 'b = <fun>
+val append : 'b #olist -> ('b #olist as 'a) -> 'a = <fun>
 |}];;
 
 type 'a t = unit

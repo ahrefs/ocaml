@@ -12,6 +12,15 @@ Working version
   functions built on it.
   (Tim McGilchrist, review by Sadiq Jaffer)
 
+### Type system:
+
+- #14182: In an application, type function literals after the arguments that
+  follow them when those arguments cannot be typed differently, so that
+  e.g. `List.map (fun r -> r.a) l` and `l |> List.map (fun r -> r.a)` can use
+  the type of `l` to disambiguate the field `a`. To this end, `x |> f a` is
+  typed as `f a x` when `a` contains a function literal.
+  (Louis Roché)
+
 ### Code generation and optimizations:
 
 - #14980: Emit direct assembly for `Atomic.exchange` and

@@ -4325,6 +4325,7 @@ let rec is_inferred sexp =
    variables of these types. Such an argument can be typed before its
    siblings without changing its typing. *)
 let is_independent_arg env sarg ty_arg ty_arg0 =
+  (* Callers must backtrack, as types are expanded *)
   let not_tvar_or_arrow ty =
     match get_desc (expand_head env ty) with
     | Tvar _ | Tarrow _ -> false
@@ -4408,12 +4409,13 @@ let check_apply_prim_type prim typ =
       end
   | _ -> false
 
-(* [x |> f a1 ... an] is typed as [f a1 ... an x] when:
+(* [x |> f a1 ... an] and [f a1 ... an @@ x] are typed as [f a1 ... an x]
+   when:
    - [x] is passed to an unlabelled parameter of [f], and labels are not
      omitted, in both forms;
    - some [ai] is a function literal, and [x] is independent, so that the
      function literal can be typed after [x] (see [type_application]). *)
-let can_merge_revapply env lid sargs sx =
+let can_merge_pipe env lid sargs sx =
   not !Clflags.classic
   && List.exists (fun (_, e) ->
          match e.pexp_desc with Pexp_function _ -> true | _ -> false) sargs
@@ -4421,8 +4423,8 @@ let can_merge_revapply env lid sargs sx =
   | exception Not_found -> false
   | _, { val_type } ->
       let snap = Btype.snapshot () in
+      Misc.try_finally ~always:(fun () -> Btype.backtrack snap) @@ fun () ->
       let params, _ = arrow_spine env val_type in
-      Btype.backtrack snap;
       let ls = List.map fst params in
       let nolabel_sargs = List.filter (fun (l, _) -> l = Nolabel) sargs in
       let nolabel_params =
@@ -4891,6 +4893,14 @@ and type_expect_
         lower_args outer_level env funct.exp_type;
         funct
       in
+      let type_pipe actual_sfunct sarg =
+        match actual_sfunct.pexp_desc with
+        | Pexp_apply ({ pexp_desc = Pexp_ident lid } as sf, sargs')
+          when can_merge_pipe env lid sargs' sarg ->
+            type_sfunct sf, sargs' @ [Nolabel, sarg]
+        | _ ->
+            type_sfunct actual_sfunct, [Nolabel, sarg]
+      in
       let funct, sargs =
         let funct = type_sfunct sfunct in
         match funct.exp_desc, sargs with
@@ -4899,19 +4909,12 @@ and type_expect_
           [Nolabel, sarg; Nolabel, actual_sfunct]
           when is_inferred actual_sfunct
             && check_apply_prim_type Revapply val_type ->
-            begin match actual_sfunct.pexp_desc with
-            | Pexp_apply ({ pexp_desc = Pexp_ident lid } as sf, sargs')
-              when can_merge_revapply env lid sargs' sarg ->
-                (* [x |> f a] is typed as [f a x] *)
-                type_sfunct sf, sargs' @ [Nolabel, sarg]
-            | _ ->
-                type_sfunct actual_sfunct, [Nolabel, sarg]
-            end
+            type_pipe actual_sfunct sarg
         | Texp_ident (_, _,
                       {val_kind = Val_prim {prim_name="%apply"}; val_type}),
           [Nolabel, actual_sfunct; Nolabel, sarg]
           when check_apply_prim_type Apply val_type ->
-            type_sfunct actual_sfunct, [Nolabel, sarg]
+            type_pipe actual_sfunct sarg
         | _ ->
             funct, sargs
       in
@@ -7160,7 +7163,21 @@ and type_application env app_loc funct sargs =
             in
             movable, defer :: flags
       in
-      let _, deferred = deferred args in
+      let has_function_literal =
+        List.exists (function
+            | _, Arg (Known_arg { sarg = { pexp_desc = Pexp_function _ } }) ->
+                true
+            | _ -> false)
+          args
+      in
+      let deferred =
+        if not has_function_literal then List.map (fun _ -> false) args
+        else
+          (* [is_independent_arg] expands types *)
+          let snap = Btype.snapshot () in
+          Misc.try_finally ~always:(fun () -> Btype.backtrack snap)
+            (fun () -> snd (deferred args))
+      in
       let args =
         List.map2
           (fun arg defer ->
