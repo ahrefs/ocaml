@@ -2176,19 +2176,38 @@ let default_apply = Int.Set.add 2 (Int.Set.add 3 Int.Set.empty)
   (* These apply funs are always present in the main program because
      the run-time system needs them (cf. runtime/<arch>.S) . *)
 
-let generic_functions shared units =
-  let (apply,send,curry) =
-    List.fold_left
-      (fun (apply,send,curry) (ui : Cmx_format.unit_infos) ->
-         List.fold_right Int.Set.add ui.ui_apply_fun apply,
-         List.fold_right Int.Set.add ui.ui_send_fun send,
-         List.fold_right Int.Set.add ui.ui_curry_fun curry)
-      (Int.Set.empty,Int.Set.empty,Int.Set.empty)
-      units in
-  let apply = if shared then apply else Int.Set.union apply default_apply in
+module Generic_fns_tbl = struct
+  type t =
+    { mutable curry : Int.Set.t;
+      mutable apply : Int.Set.t;
+      mutable send : Int.Set.t }
+
+  let make () =
+    { curry = Int.Set.empty; apply = Int.Set.empty; send = Int.Set.empty }
+
+  let add t ({ curry_fun; apply_fun; send_fun } : Cmx_format.generic_fns) =
+    t.curry <- List.fold_right Int.Set.add curry_fun t.curry;
+    t.apply <- List.fold_right Int.Set.add apply_fun t.apply;
+    t.send <- List.fold_right Int.Set.add send_fun t.send
+
+  let add_unit t (ui : Cmx_format.unit_infos) =
+    add t { curry_fun = ui.ui_curry_fun;
+            apply_fun = ui.ui_apply_fun;
+            send_fun = ui.ui_send_fun }
+
+  let entries t : Cmx_format.generic_fns =
+    { curry_fun = Int.Set.elements t.curry;
+      apply_fun = Int.Set.elements t.apply;
+      send_fun = Int.Set.elements t.send }
+end
+
+let generic_functions shared (tbl : Generic_fns_tbl.t) =
+  let apply =
+    if shared then tbl.apply else Int.Set.union tbl.apply default_apply in
   let accu = Int.Set.fold (fun n accu -> apply_function n :: accu) apply [] in
-  let accu = Int.Set.fold (fun n accu -> send_function n :: accu) send accu in
-  Int.Set.fold (fun n accu -> curry_function n @ accu) curry accu
+  let accu =
+    Int.Set.fold (fun n accu -> send_function n :: accu) tbl.send accu in
+  Int.Set.fold (fun n accu -> curry_function n @ accu) tbl.curry accu
 
 (* Primitives *)
 
@@ -2739,16 +2758,9 @@ let emit_global_string_constant name value =
 (* Header for a plugin *)
 
 let plugin_header units =
-  let mk ((ui : Cmx_format.unit_infos),crc) : Cmxs_format.dynunit =
-    { dynu_name = ui.ui_name;
-      dynu_crc = crc;
-      dynu_imports_cmi = ui.ui_imports_cmi;
-      dynu_imports_cmx = ui.ui_imports_cmx;
-      dynu_defines = ui.ui_defines
-    } in
   global_data "caml_plugin_header"
     ({ dynu_magic = Config.cmxs_magic_number;
-       dynu_units = List.map mk units }
+       dynu_units = units }
      : Cmxs_format.dynheader)
 
 (* To compile "let rec" over values *)

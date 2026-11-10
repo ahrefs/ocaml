@@ -52,9 +52,30 @@ type unit_infos =
 (* Each .a library has a matching .cmxa file that provides the following
    infos on the library: *)
 
+type generic_fns =
+  { curry_fun: int list;                (* Currying functions needed *)
+    apply_fun: int list;                (* Apply functions needed *)
+    send_fun: int list }                (* Send functions needed *)
+
+type lib_unit_info =
+  { li_name: modname;                   (* Name of unit implemented *)
+    li_symbol: string;                  (* Prefix for symbols *)
+    li_crc: Digest.BLAKE128.t;          (* CRC of the .cmx file *)
+    li_defines: string list;            (* Unit and sub-units implemented *)
+    li_force_link: bool;                (* Always linked *)
+    li_need_stdlib: bool;               (* caml_standard_library_nat needed *)
+    li_imports_cmi: Bitmap.t;           (* Subset of lib_imports_cmi *)
+    li_imports_cmx: Bitmap.t }          (* Subset of lib_imports_cmx *)
+
 type library_infos =
-  { lib_units:
-      (unit_infos * Digest.BLAKE128.t) list;  (* List of unit infos w/ CRCs *)
+  { lib_imports_cmi:
+      (modname * Digest.BLAKE128.t option) array;
+                                (* Interfaces imported by the units, by name *)
+    lib_imports_cmx:
+      (modname * Digest.BLAKE128.t option) array;
+                                (* Infos imported by the units, by name *)
+    lib_units: lib_unit_info list;      (* Units of the library *)
+    lib_generic_fns: generic_fns;       (* Union of the units' needs *)
     (* In the following fields the lists are reversed with respect to
        how they end up being used on the command line. *)
     lib_ccobjs: string list;            (* C object files needed *)

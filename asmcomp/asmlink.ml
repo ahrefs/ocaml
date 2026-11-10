@@ -45,15 +45,14 @@ let crc_implementations = Cmx_consistbl.create ()
 let implementations = ref String.Set.empty
 let cmx_required = ref String.Set.empty
 
-let check_consistency file_name unit crc =
+let check_imports file_name iter_cmi iter_cmx =
   begin try
-    List.iter
+    iter_cmi
       (fun (name, crco) ->
         String.Tbl.replace interfaces name ();
         match crco with
           None -> ()
         | Some crc -> Cmi_consistbl.check crc_interfaces name crc file_name)
-      unit.ui_imports_cmi
   with Cmi_consistbl.Inconsistency {
       unit_name = name;
       inconsistent_source = user;
@@ -62,7 +61,7 @@ let check_consistency file_name unit crc =
     raise(Error(Inconsistent_interface(name, user, auth)))
   end;
   begin try
-    List.iter
+    iter_cmx
       (fun (name, crco) ->
         implementations := String.Set.add name !implementations;
         match crco with
@@ -71,18 +70,25 @@ let check_consistency file_name unit crc =
                 raise(Error(Missing_cmx(file_name, name)))
           | Some crc ->
               Cmx_consistbl.check crc_implementations name crc file_name)
-      unit.ui_imports_cmx
   with Cmx_consistbl.Inconsistency {
       unit_name = name;
       inconsistent_source = user;
       original_source = auth;
     } ->
     raise(Error(Inconsistent_implementation(name, user, auth)))
-  end;
-  implementations := String.Set.add unit.ui_name !implementations;
-  Cmx_consistbl.check crc_implementations unit.ui_name crc file_name;
-  if unit.ui_symbol <> unit.ui_name then
-    cmx_required := String.Set.add unit.ui_name !cmx_required
+  end
+
+let check_implementation file_name ~name ~symbol crc =
+  implementations := String.Set.add name !implementations;
+  Cmx_consistbl.check crc_implementations name crc file_name;
+  if symbol <> name then
+    cmx_required := String.Set.add name !cmx_required
+
+let check_consistency file_name unit crc =
+  check_imports file_name
+    (fun f -> List.iter f unit.ui_imports_cmi)
+    (fun f -> List.iter f unit.ui_imports_cmx);
+  check_implementation file_name ~name:unit.ui_name ~symbol:unit.ui_symbol crc
 
 let extract_crc_interfaces () =
   Cmi_consistbl.extract (List.of_seq (String.Tbl.to_seq_keys interfaces))
@@ -126,6 +132,72 @@ type file =
   | Unit of string * unit_infos * Digest.BLAKE128.t
   | Library of string * library_infos
 
+(* The imports of a unit from a library are a subset of the imports of the
+   library. *)
+type lib_imports = {
+  lib : library_infos;
+  cmi_checked : Bitmap.t;
+  cmx_checked : Bitmap.t;
+}
+
+type imports =
+  | Unit_imports of unit_infos
+  | Lib_imports of lib_imports * lib_unit_info
+
+type unit_link_info = {
+  name : modname;
+  symbol : string;
+  crc : Digest.BLAKE128.t;
+  defines : string list;
+  need_stdlib : bool;
+  file_name : filepath;
+  imports : imports;
+}
+
+let lib_imports_list arr bits =
+  let l = ref [] in
+  Bitmap.iter (fun i -> l := arr.(i) :: !l) bits;
+  List.rev !l
+
+let check_unit_consistency u =
+  begin match u.imports with
+  | Unit_imports info ->
+      check_imports u.file_name
+        (fun f -> List.iter f info.ui_imports_cmi)
+        (fun f -> List.iter f info.ui_imports_cmx)
+  | Lib_imports (l, info) ->
+      (* Checking an import a second time has no effect, except for the
+         [Missing_cmx] check, which depends on the units checked so far. *)
+      let iter arr checked bits f =
+        Bitmap.iter
+          (fun i ->
+             let (_, crco) as imp = arr.(i) in
+             if not (Bitmap.get checked i) then begin
+               if Option.is_some crco then Bitmap.set checked i;
+               f imp
+             end)
+          bits
+      in
+      check_imports u.file_name
+        (iter l.lib.lib_imports_cmi l.cmi_checked info.li_imports_cmi)
+        (iter l.lib.lib_imports_cmx l.cmx_checked info.li_imports_cmx)
+  end;
+  check_implementation u.file_name ~name:u.name ~symbol:u.symbol u.crc
+
+let dynunit u : Cmxs_format.dynunit =
+  let imports_cmi, imports_cmx =
+    match u.imports with
+    | Unit_imports info -> info.ui_imports_cmi, info.ui_imports_cmx
+    | Lib_imports (l, info) ->
+        lib_imports_list l.lib.lib_imports_cmi info.li_imports_cmi,
+        lib_imports_list l.lib.lib_imports_cmx info.li_imports_cmx
+  in
+  { dynu_name = u.name;
+    dynu_crc = u.crc;
+    dynu_imports_cmi = imports_cmi;
+    dynu_imports_cmx = imports_cmx;
+    dynu_defines = u.defines }
+
 let object_file_name_of_file = function
   | Unit (fname, _, _) -> Some (Filename.chop_suffix fname ".cmx" ^ ext_obj)
   | Library (fname, infos) ->
@@ -159,32 +231,57 @@ let read_file obj_name =
   end
   else raise(Error(Not_an_object_file file_name))
 
-let scan_file ldeps file tolink = match file with
+let scan_file ldeps genfns file tolink = match file with
   | Unit (file_name,info,crc) ->
       (* This is a .cmx file. It must be linked in any case. *)
       Linkdeps.add ldeps
         ~filename:file_name ~compunit:info.ui_name
         ~provides:[info.ui_name]
         ~requires:(List.map fst info.ui_imports_cmx);
-      (info, file_name, crc) :: tolink
+      Cmm_helpers.Generic_fns_tbl.add_unit genfns info;
+      { name = info.ui_name;
+        symbol = info.ui_symbol;
+        crc;
+        defines = info.ui_defines;
+        need_stdlib = info.ui_need_stdlib;
+        file_name;
+        imports = Unit_imports info } :: tolink
   | Library (file_name,infos) ->
       (* This is an archive file. Each unit contained in it will be linked
          in only if needed. *)
       add_ccobjs (Filename.dirname file_name) infos;
-      List.fold_right
-        (fun (info, crc) reqd ->
-           if info.ui_force_link
-           || !Clflags.link_everything
-           || Linkdeps.required ldeps info.ui_name
-           then begin
-             Linkdeps.add ldeps
-               ~filename:file_name ~compunit:info.ui_name
-               ~provides:[info.ui_name]
-               ~requires:(List.map fst info.ui_imports_cmx);
-             (info, file_name, crc) :: reqd
-           end else
-           reqd)
-        infos.lib_units tolink
+      let lib_imports =
+        { lib = infos;
+          cmi_checked = Bitmap.make (Array.length infos.lib_imports_cmi);
+          cmx_checked = Bitmap.make (Array.length infos.lib_imports_cmx) }
+      in
+      let tolink' =
+        List.fold_right
+          (fun info reqd ->
+             if info.li_force_link
+             || !Clflags.link_everything
+             || Linkdeps.required ldeps info.li_name
+             then begin
+               Linkdeps.add ldeps
+                 ~filename:file_name ~compunit:info.li_name
+                 ~provides:[info.li_name]
+                 ~requires:(List.map fst
+                              (lib_imports_list infos.lib_imports_cmx
+                                 info.li_imports_cmx));
+               { name = info.li_name;
+                 symbol = info.li_symbol;
+                 crc = info.li_crc;
+                 defines = info.li_defines;
+                 need_stdlib = info.li_need_stdlib;
+                 file_name;
+                 imports = Lib_imports (lib_imports, info) } :: reqd
+             end else
+             reqd)
+          infos.lib_units tolink
+      in
+      if tolink' != tolink then
+        Cmm_helpers.Generic_fns_tbl.add genfns infos.lib_generic_fns;
+      tolink'
 
 (* Second pass: generate the startup file and link it with everything else *)
 
@@ -195,28 +292,25 @@ let force_linking_of_startup ~ppf_dump =
 let make_globals_map units_list ~crc_interfaces =
   let crc_interfaces = String.Tbl.of_seq (List.to_seq crc_interfaces) in
   let defined =
-    List.map (fun (unit, _, impl_crc) ->
-        let intf_crc = String.Tbl.find crc_interfaces unit.ui_name in
-        String.Tbl.remove crc_interfaces unit.ui_name;
-        (unit.ui_name, intf_crc, Some impl_crc, unit.ui_defines))
+    List.map (fun u ->
+        let intf_crc = String.Tbl.find crc_interfaces u.name in
+        String.Tbl.remove crc_interfaces u.name;
+        (u.name, intf_crc, Some u.crc, u.defines))
       units_list
   in
   String.Tbl.fold (fun name intf acc ->
       (name, intf, None, []) :: acc)
     crc_interfaces defined
 
-let make_startup_file ~ppf_dump units_list ~crc_interfaces =
-  let need_stdlib =
-    let needs_stdlib ({ui_need_stdlib; _}, _, _) = ui_need_stdlib in
-    List.exists needs_stdlib units_list
-  in
+let make_startup_file ~ppf_dump genfns units_list ~crc_interfaces =
+  let need_stdlib = List.exists (fun u -> u.need_stdlib) units_list in
   let compile_phrase p = Asmgen.compile_phrase ~ppf_dump p in
   Location.input_name := "caml_startup"; (* set name of "current" input *)
   Compilenv.reset "_startup";
   (* set the name of the "current" compunit *)
   Emit.begin_assembly ();
   let name_list =
-    List.flatten (List.map (fun (info,_,_) -> info.ui_defines) units_list) in
+    List.flatten (List.map (fun u -> u.defines) units_list) in
   let wrap_tsan (phrase : Cmm.phrase) =
     match phrase with
     | Cfunction ({ fun_body; _ } as cf) when Config.tsan ->
@@ -226,10 +320,9 @@ let make_startup_file ~ppf_dump units_list ~crc_interfaces =
   in
   List.iter (fun phrase -> compile_phrase (wrap_tsan phrase))
     (Cmm_helpers.entry_point name_list);
-  let units = List.map (fun (info,_,_) -> info) units_list in
   List.iter compile_phrase
     (Cmm_helpers.emit_preallocated_blocks [] (* add gc_roots (for dynlink) *)
-      (Cmm_helpers.generic_functions false units));
+      (Cmm_helpers.generic_functions false genfns));
   Array.iteri
     (fun i name -> compile_phrase (Cmm_helpers.predef_exception i name))
     Runtimedef.builtin_exceptions;
@@ -252,18 +345,17 @@ let make_startup_file ~ppf_dump units_list ~crc_interfaces =
     force_linking_of_startup ~ppf_dump;
   Emit.end_assembly ()
 
-let make_shared_startup_file ~ppf_dump units =
+let make_shared_startup_file ~ppf_dump genfns units =
   let compile_phrase p = Asmgen.compile_phrase ~ppf_dump p in
   Location.input_name := "caml_startup";
   Compilenv.reset "_shared_startup";
   Emit.begin_assembly ();
   List.iter compile_phrase
     (Cmm_helpers.emit_preallocated_blocks [] (* add gc_roots (for dynlink) *)
-      (Cmm_helpers.generic_functions true (List.map fst units)));
-  compile_phrase (Cmm_helpers.plugin_header units);
+      (Cmm_helpers.generic_functions true genfns));
+  compile_phrase (Cmm_helpers.plugin_header (List.map dynunit units));
   compile_phrase
-    (Cmm_helpers.global_table
-       (List.map (fun (ui,_) -> ui.ui_symbol) units));
+    (Cmm_helpers.global_table (List.map (fun u -> u.symbol) units));
   if !Clflags.output_complete_object then
     force_linking_of_startup ~ppf_dump;
   (* this is to force a reference to all units, otherwise the linker
@@ -279,13 +371,13 @@ let link_shared ~ppf_dump objfiles output_name =
   Profile.record_call output_name (fun () ->
     let obj_infos = List.map read_file objfiles in
     let ldeps = Linkdeps.create ~complete:false in
-    let units_tolink = List.fold_right (scan_file ldeps) obj_infos [] in
+    let genfns = Cmm_helpers.Generic_fns_tbl.make () in
+    let units_tolink =
+      List.fold_right (scan_file ldeps genfns) obj_infos [] in
     (match Linkdeps.check ldeps with
      | None -> ()
      | Some e -> raise (Error (Link_error e)));
-    List.iter
-      (fun (info, file_name, crc) -> check_consistency file_name info crc)
-      units_tolink;
+    List.iter check_unit_consistency units_tolink;
     Clflags.ccobjs := !Clflags.ccobjs @ !lib_ccobjs;
     Clflags.all_ccopts := !lib_ccopts @ !Clflags.all_ccopts;
     let objfiles =
@@ -300,8 +392,7 @@ let link_shared ~ppf_dump objfiles output_name =
       ~asm_filename:startup ~keep_asm:!Clflags.keep_startup_file
       ~obj_filename:startup_obj
       (fun () ->
-         make_shared_startup_file ~ppf_dump
-           (List.map (fun (ui,_,crc) -> (ui,crc)) units_tolink)
+         make_shared_startup_file ~ppf_dump genfns units_tolink
       );
     call_linker_shared (startup_obj :: objfiles) output_name;
     remove_file startup_obj
@@ -343,13 +434,13 @@ let link ~ppf_dump objfiles output_name =
       else stdlib :: (objfiles @ [stdexit]) in
     let obj_infos = List.map read_file objfiles in
     let ldeps = Linkdeps.create ~complete:true in
-    let units_tolink = List.fold_right (scan_file ldeps) obj_infos [] in
+    let genfns = Cmm_helpers.Generic_fns_tbl.make () in
+    let units_tolink =
+      List.fold_right (scan_file ldeps genfns) obj_infos [] in
     (match Linkdeps.check ldeps with
      | None -> ()
      | Some e -> raise (Error (Link_error e)));
-    List.iter
-      (fun (info, file_name, crc) -> check_consistency file_name info crc)
-      units_tolink;
+    List.iter check_unit_consistency units_tolink;
     let crc_interfaces = extract_crc_interfaces () in
     Clflags.ccobjs := !Clflags.ccobjs @ !lib_ccobjs;
     Clflags.all_ccopts := !lib_ccopts @ !Clflags.all_ccopts;
@@ -362,7 +453,8 @@ let link ~ppf_dump objfiles output_name =
     Asmgen.compile_unit ~output_prefix:output_name
       ~asm_filename:startup ~keep_asm:!Clflags.keep_startup_file
       ~obj_filename:startup_obj
-      (fun () -> make_startup_file ~ppf_dump units_tolink ~crc_interfaces);
+      (fun () ->
+         make_startup_file ~ppf_dump genfns units_tolink ~crc_interfaces);
     Misc.try_finally
       (fun () ->
          call_linker (List.filter_map object_file_name_of_file obj_infos)

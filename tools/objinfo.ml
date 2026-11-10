@@ -221,6 +221,13 @@ let print_global_table table =
 open Cmx_format
 open Cmxs_format
 
+let print_generic_fns gfns =
+  let pr_funs _ fns =
+    List.iter (fun arity -> printf " %d" arity) fns in
+  printf "Currying functions:%a\n" pr_funs gfns.curry_fun;
+  printf "Apply functions:%a\n" pr_funs gfns.apply_fun;
+  printf "Send functions:%a\n" pr_funs gfns.send_fun
+
 let print_cmx_infos (ui, crc) =
   print_general_infos
     ui.ui_name crc ui.ui_defines ui.ui_imports_cmi ui.ui_imports_cmx;
@@ -254,11 +261,10 @@ let print_cmx_infos (ui, crc) =
       Format.printf "functions@ %a@.@."
         Export_info.print_functions export
   end;
-  let pr_funs _ fns =
-    List.iter (fun arity -> printf " %d" arity) fns in
-  printf "Currying functions:%a\n" pr_funs ui.ui_curry_fun;
-  printf "Apply functions:%a\n" pr_funs ui.ui_apply_fun;
-  printf "Send functions:%a\n" pr_funs ui.ui_send_fun;
+  print_generic_fns
+    { curry_fun = ui.ui_curry_fun;
+      apply_fun = ui.ui_apply_fun;
+      send_fun = ui.ui_send_fun };
   printf "Force link: %a\n" yesno_of_bool ui.ui_force_link;
   printf "For pack: %s\n"
     (match ui.ui_for_pack with
@@ -273,7 +279,21 @@ let print_cmxa_infos (lib : Cmx_format.library_infos) =
   printf "\nExtra C options:";
   List.iter print_spaced_string (List.rev lib.lib_ccopts);
   printf "\n";
-  List.iter print_cmx_infos lib.lib_units
+  print_generic_fns lib.lib_generic_fns;
+  let imports arr bits =
+    let l = ref [] in
+    Misc.Bitmap.iter (fun i -> l := arr.(i) :: !l) bits;
+    List.rev !l
+  in
+  List.iter
+    (fun u ->
+       print_general_infos u.li_name u.li_crc u.li_defines
+         (imports lib.lib_imports_cmi u.li_imports_cmi)
+         (imports lib.lib_imports_cmx u.li_imports_cmx);
+       printf "Force link: %a\n" yesno_of_bool u.li_force_link;
+       printf "Requires caml_standard_library_nat: %a\n"
+         yesno_of_bool u.li_need_stdlib)
+    lib.lib_units
 
 let print_cmxs_infos header =
   List.iter
