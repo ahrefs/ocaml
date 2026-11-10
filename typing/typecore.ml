@@ -4319,6 +4319,66 @@ let rec is_inferred sexp =
       is_inferred e
   | _ -> false
 
+(* [is_independent_arg env sarg ty_arg ty_arg0] holds when typing the
+   argument [sarg] against [ty_arg] (and its instance [ty_arg0]) cannot
+   depend on information that unification may later add to the type
+   variables of these types. Such an argument can be typed before its
+   siblings without changing its typing. *)
+let is_independent_arg env sarg ty_arg ty_arg0 =
+  let not_tvar_or_arrow ty =
+    match get_desc (expand_head env ty) with
+    | Tvar _ | Tarrow _ -> false
+    | _ -> true
+  in
+  (* [type_argument] may eliminate the optional arguments of an
+     [is_inferred] expression, depending on whether its expected type is a
+     function type. *)
+  let no_coercion sarg ty =
+    not (is_inferred sarg)
+    || (match ty with
+        | Some ty ->
+            get_level (expand_head env ty) = generic_level
+            || not_tvar_or_arrow ty
+        | None -> false)
+    || (match sarg.pexp_desc with
+        | Pexp_ident lid ->
+            begin match Env.find_value_by_name lid.txt env with
+            | _, { val_type } -> not_tvar_or_arrow val_type
+            | exception Not_found -> false
+            end
+        | _ -> false)
+  in
+  let list_elt = function
+    | None -> None
+    | Some ty ->
+        match get_desc (expand_head env ty) with
+        | Tconstr (p, [elt], _) when Path.same p Predef.path_list -> Some elt
+        | _ -> None
+  in
+  (* [arg] is true when [sarg] is typed with [type_argument] *)
+  let rec independent ~arg sarg ty =
+    match sarg.pexp_desc with
+    | Pexp_constant { pconst_desc = Pconst_string _ } ->
+        false (* may be typed as a format string *)
+    | Pexp_constant _ -> true
+    | Pexp_ident _ | Pexp_apply _ | Pexp_field _ | Pexp_send _ | Pexp_new _
+    | Pexp_constraint _ | Pexp_coerce _ -> not arg || no_coercion sarg ty
+    | Pexp_tuple l -> List.for_all (fun (_, e) -> independent ~arg:false e None) l
+    | Pexp_construct ({ txt = Lident "[]" }, None) -> list_elt ty <> None
+    | Pexp_construct ({ txt = Lident "::" },
+                      Some { pexp_desc = Pexp_tuple [None, e1; None, e2] }) ->
+        begin match list_elt ty with
+        | None -> false
+        | Some elt -> independent ~arg:true e1 (Some elt)
+                      && independent ~arg:true e2 ty
+        end
+    | _ -> false
+  in
+  let ty_arg', vars = tpoly_get_poly ty_arg in
+  vars = []
+  && no_coercion sarg (Some ty_arg')
+  && independent ~arg:false sarg (Some (tpoly_get_mono ty_arg0))
+
 (* check if the type of %apply or %revapply matches the type expected by
    the specialized typing rule for those primitives.
 *)
@@ -4347,6 +4407,36 @@ let check_apply_prim_type prim typ =
       | _ -> false
       end
   | _ -> false
+
+(* [x |> f a1 ... an] is typed as [f a1 ... an x] when:
+   - [x] is passed to an unlabelled parameter of [f], and labels are not
+     omitted, in both forms;
+   - some [ai] is a function literal, and [x] is independent, so that the
+     function literal can be typed after [x] (see [type_application]). *)
+let can_merge_revapply env lid sargs sx =
+  not !Clflags.classic
+  && List.exists (fun (_, e) ->
+         match e.pexp_desc with Pexp_function _ -> true | _ -> false) sargs
+  && match Env.find_value_by_name lid.txt env with
+  | exception Not_found -> false
+  | _, { val_type } ->
+      let snap = Btype.snapshot () in
+      let params, _ = arrow_spine env val_type in
+      Btype.backtrack snap;
+      let ls = List.map fst params in
+      let nolabel_sargs = List.filter (fun (l, _) -> l = Nolabel) sargs in
+      let nolabel_params =
+        List.filter_map (function
+            | Nolabel, Arg_value ty -> Some ty
+            | _ -> None) params
+      in
+      (List.for_all (fun l -> l = Nolabel || is_optional l) ls
+       || List.length nolabel_sargs < List.length sargs)
+      && match List.nth_opt nolabel_params (List.length nolabel_sargs) with
+      | None -> false
+      | Some ty ->
+          let ty = instance ty in
+          is_independent_arg env sx ty ty
 
 (* Merge explanation to type clash error *)
 
@@ -4809,7 +4899,14 @@ and type_expect_
           [Nolabel, sarg; Nolabel, actual_sfunct]
           when is_inferred actual_sfunct
             && check_apply_prim_type Revapply val_type ->
-            type_sfunct actual_sfunct, [Nolabel, sarg]
+            begin match actual_sfunct.pexp_desc with
+            | Pexp_apply ({ pexp_desc = Pexp_ident lid } as sf, sargs')
+              when can_merge_revapply env lid sargs' sarg ->
+                (* [x |> f a] is typed as [f a x] *)
+                type_sfunct sf, sargs' @ [Nolabel, sarg]
+            | _ ->
+                type_sfunct actual_sfunct, [Nolabel, sarg]
+            end
         | Texp_ident (_, _,
                       {val_kind = Val_prim {prim_name="%apply"}; val_type}),
           [Nolabel, actual_sfunct; Nolabel, sarg]
@@ -7042,7 +7139,40 @@ and type_application env app_loc funct sargs =
          [args = [(Label "a", Omitted bar);
                   (Optional "opt", Arg (Eliminated_optional_arg baz));
                   (Nolabel, Arg (Known_arg n))]] *)
-      let args = List.map (fun arg -> type_apply_arg ~app_loc env arg) args in
+      (* Function literals are typed after the arguments following them,
+         when those arguments are independent: the expected type of the
+         function literal is then more precise. *)
+      let rec deferred = function
+        | [] -> true, []
+        | (_, arg) :: rest ->
+            let movable, flags = deferred rest in
+            let defer, movable =
+              match arg with
+              | Arg (Known_arg { sarg = { pexp_desc = Pexp_function _ } })
+                when movable ->
+                  true, true
+              | Arg (Known_arg { sarg; ty_arg; ty_arg0;
+                                 wrapped_in_some = false }) ->
+                  false, movable && is_independent_arg env sarg ty_arg ty_arg0
+              | Arg (Eliminated_optional_arg _ | Typed_arg _) | Omitted _ ->
+                  false, movable
+              | Arg (Known_arg _ | Unknown_arg _) -> false, false
+            in
+            movable, defer :: flags
+      in
+      let _, deferred = deferred args in
+      let args =
+        List.map2
+          (fun arg defer ->
+             if defer then None else Some (type_apply_arg ~app_loc env arg))
+          args deferred
+        |> List.map2
+          (fun arg typed ->
+             match typed with
+             | Some arg -> arg
+             | None -> type_apply_arg ~app_loc env arg)
+          args
+      in
       (* example: type-check [n] and generate [None] for [?opt].
          [args] becomes [(Label "a", Omitted bar);
                          (Optional "opt", Arg None);
