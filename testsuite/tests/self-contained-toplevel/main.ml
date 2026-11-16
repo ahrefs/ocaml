@@ -28,7 +28,11 @@ let () =
     | "Foo" ->
       Some { Persistent_signature.
              filename   = Sys.executable_name
-           ; cmi        = Marshal.from_string Cached_cmi.foo 0
+           ; cmi        =
+               (let cmi : Cmi_format.cmi_infos =
+                  Marshal.from_string Cached_cmi.foo 0
+                in
+                { cmi with cmi_sign = Subst.Lazy.of_signature cmi.cmi_sign })
            ; visibility = Visible
            }
     | _ -> old_loader ~allow_hidden ~unit_name);
