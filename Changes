@@ -81,6 +81,10 @@ Working version
   signature is unfolded and substituted into again.
   (Roman Leshchinskiy, ported by Louis Roché)
 
+- #XXXXX: Substitute lazily into the types of values in signatures: the type
+  of a value of a module is only substituted when the value is looked up.
+  (Roman Leshchinskiy, ported by Louis Roché)
+
 ### Build system:
 
 - #10837: Build native-code compilers on FreeBSD/powerpc64le and
