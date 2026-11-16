@@ -1146,6 +1146,7 @@ typing/mtype.cmx : \
     typing/mtype.cmi
 typing/mtype.cmi : \
     typing/types.cmi \
+    typing/subst.cmi \
     typing/path.cmi \
     typing/ident.cmi \
     typing/env.cmi

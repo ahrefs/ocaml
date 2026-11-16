@@ -34,6 +34,12 @@ val strengthen: aliasable:bool -> Env.t -> module_type -> Path.t -> module_type
            given path. *)
 val strengthen_decl:
   aliasable:bool -> Env.t -> module_declaration -> Path.t -> module_declaration
+val strengthen_lazy:
+  aliasable:bool -> Env.t -> Subst.Lazy.modtype -> Path.t ->
+  Subst.Lazy.modtype
+val strengthen_lazy_decl:
+  aliasable:bool -> Env.t -> Subst.Lazy.module_decl -> Path.t ->
+  Subst.Lazy.module_decl
 val nondep_supertype: Env.t -> Ident.t list -> module_type -> module_type
         (* Return the smallest supertype of the given type
            in which none of the given idents appears.
