@@ -482,15 +482,7 @@ module Vars  : Map.S with type key = string
 
 (* Value descriptions *)
 
-type value_description =
-  { val_type: type_expr;                (* Type of the value *)
-    val_kind: value_kind;
-    val_loc: Location.t;
-    val_attributes: Parsetree.attributes;
-    val_uid: Uid.t;
-  }
-
-and value_kind =
+type value_kind =
     Val_reg                             (* Regular value *)
   | Val_prim of Primitive.description   (* Primitive *)
   | Val_ivar of mutable_flag * string   (* Instance variable (mutable ?) *)
@@ -706,57 +698,103 @@ type visibility =
   | Exported
   | Hidden
 
-type module_type =
-    Mty_ident of Path.t
-  | Mty_signature of signature
-  | Mty_functor of functor_parameter * module_type
-  | Mty_alias of Path.t
-
-and functor_parameter =
-  | Unit
-  | Named of Ident.t option * module_type
-
-and module_presence =
-  | Mp_present
-  | Mp_absent
-
-and signature = signature_item list
-
-and signature_item =
-    Sig_value of Ident.t * value_description * visibility
-  | Sig_type of Ident.t * type_declaration * rec_status * visibility
-  | Sig_typext of Ident.t * extension_constructor * ext_status * visibility
-  | Sig_module of
-      Ident.t * module_presence * module_declaration * rec_status * visibility
-  | Sig_modtype of Ident.t * modtype_declaration * visibility
-  | Sig_class of Ident.t * class_declaration * rec_status * visibility
-  | Sig_class_type of Ident.t * class_type_declaration * rec_status * visibility
-
-and module_declaration =
-  {
-    md_type: module_type;
-    md_attributes: Parsetree.attributes;
-    md_loc: Location.t;
-    md_uid: Uid.t;
-  }
-
-and modtype_declaration =
-  {
-    mtd_type: module_type option;  (* None: abstract *)
-    mtd_attributes: Parsetree.attributes;
-    mtd_loc: Location.t;
-    mtd_uid: Uid.t;
-  }
-
-and rec_status =
+type rec_status =
     Trec_not                   (* first in a nonrecursive group *)
   | Trec_first                 (* first in a recursive group *)
   | Trec_next                  (* not first in a recursive/nonrecursive group *)
 
-and ext_status =
+type ext_status =
     Text_first                     (* first constructor in an extension *)
   | Text_next                      (* not first constructor in an extension *)
   | Text_exception
+
+type module_presence =
+  | Mp_present
+  | Mp_absent
+
+(** The parts of value descriptions and module types that can be computed
+    lazily are wrapped in ['a wrapped]. [Types] uses the identity wrapper,
+    [Subst.Lazy] defines the same types with a lazy wrapper. *)
+module type Wrap = sig
+  type 'a t
+end
+
+module type Wrapped = sig
+  type 'a wrapped
+
+  type value_description =
+    { val_type: type_expr wrapped;      (* Type of the value *)
+      val_kind: value_kind;
+      val_loc: Location.t;
+      val_attributes: Parsetree.attributes;
+      val_uid: Uid.t;
+    }
+
+  type module_type =
+      Mty_ident of Path.t
+    | Mty_signature of signature
+    | Mty_functor of functor_parameter * module_type
+    | Mty_alias of Path.t
+
+  and functor_parameter =
+    | Unit
+    | Named of Ident.t option * module_type
+
+  and signature = signature_item list wrapped
+
+  and signature_item =
+      Sig_value of Ident.t * value_description * visibility
+    | Sig_type of Ident.t * type_declaration * rec_status * visibility
+    | Sig_typext of Ident.t * extension_constructor * ext_status * visibility
+    | Sig_module of
+        Ident.t * module_presence * module_declaration * rec_status * visibility
+    | Sig_modtype of Ident.t * modtype_declaration * visibility
+    | Sig_class of Ident.t * class_declaration * rec_status * visibility
+    | Sig_class_type of
+        Ident.t * class_type_declaration * rec_status * visibility
+
+  and module_declaration =
+    {
+      md_type: module_type;
+      md_attributes: Parsetree.attributes;
+      md_loc: Location.t;
+      md_uid: Uid.t;
+    }
+
+  and modtype_declaration =
+    {
+      mtd_type: module_type option;  (* None: abstract *)
+      mtd_attributes: Parsetree.attributes;
+      mtd_loc: Location.t;
+      mtd_uid: Uid.t;
+    }
+end
+
+module Make_wrapped(Wrap : Wrap) : Wrapped with type 'a wrapped = 'a Wrap.t
+
+(** Conversion between two instances of [Wrapped]. The wrapped parts are
+    converted by the functions of the [mapper]. *)
+module Map_wrapped(From : Wrapped)(To : Wrapped) : sig
+  type mapper =
+    {
+      map_signature: mapper -> From.signature -> To.signature;
+      map_type_expr: mapper -> type_expr From.wrapped -> type_expr To.wrapped;
+    }
+
+  val value_description :
+    mapper -> From.value_description -> To.value_description
+  val module_declaration :
+    mapper -> From.module_declaration -> To.module_declaration
+  val modtype_declaration :
+    mapper -> From.modtype_declaration -> To.modtype_declaration
+  val module_type : mapper -> From.module_type -> To.module_type
+  val signature : mapper -> From.signature -> To.signature
+  val signature_item : mapper -> From.signature_item -> To.signature_item
+  val functor_parameter :
+    mapper -> From.functor_parameter -> To.functor_parameter
+end
+
+include Wrapped with type 'a wrapped = 'a
 
 val item_visibility : signature_item -> visibility
 

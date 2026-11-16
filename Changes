@@ -91,6 +91,12 @@ Working version
   holds a lazy signature.
   (Roman Leshchinskiy, ported by Louis Roché)
 
+* #XXXXX: Check module inclusion on lazy module types, and define the module
+  types of `Types` and `Subst.Lazy` once, with a functor over the parts that
+  can be lazy. `Subst.Lazy` now uses the constructor and field names of
+  `Types`.
+  (Roman Leshchinskiy, ported by Louis Roché)
+
 ### Build system:
 
 - #10837: Build native-code compilers on FreeBSD/powerpc64le and
