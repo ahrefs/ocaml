@@ -76,6 +76,11 @@ Working version
   (Michael Bacarella, review by Florian Angeletti, Nicolás Ojeda Bär,
    Damien Doligez and Stefan Muenzel)
 
+- #XXXXX: Memoise the last composition of substitutions in `Subst.compose`,
+  which avoids recomputing the same composition when a lazily substituted
+  signature is unfolded and substituted into again.
+  (Roman Leshchinskiy, ported by Louis Roché)
+
 ### Build system:
 
 - #10837: Build native-code compilers on FreeBSD/powerpc64le and
