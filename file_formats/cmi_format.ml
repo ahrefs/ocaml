@@ -148,31 +148,31 @@ let deserialize data offset =
       (lazy (List.map signature_item (unmarshal offset : serialized_signature)))
   and signature_item = function
     | Ser_value (id, ty, kind, loc, attrs, uid, vis) ->
-        let vdl_type =
+        let val_type =
           of_deferred_type_expr (lazy (unmarshal ty : type_expr))
         in
-        SigL_value (id, { vdl_type; vdl_kind = kind; vdl_loc = loc;
-                          vdl_attributes = attrs; vdl_uid = uid }, vis)
+        Sig_value (id, { val_type; val_kind = kind; val_loc = loc;
+                          val_attributes = attrs; val_uid = uid }, vis)
     | Ser_module (id, pres, md, rs, vis) ->
-        SigL_module (id, pres, module_decl md, rs, vis)
-    | Ser_modtype (id, mtd, vis) -> SigL_modtype (id, modtype_decl mtd, vis)
+        Sig_module (id, pres, module_decl md, rs, vis)
+    | Ser_modtype (id, mtd, vis) -> Sig_modtype (id, modtype_decl mtd, vis)
     | Ser_item item -> of_signature_item item
   and module_decl md =
-    { mdl_type = modtype md.smd_type;
-      mdl_attributes = md.smd_attributes;
-      mdl_loc = md.smd_loc;
-      mdl_uid = md.smd_uid }
+    { md_type = modtype md.smd_type;
+      md_attributes = md.smd_attributes;
+      md_loc = md.smd_loc;
+      md_uid = md.smd_uid }
   and modtype_decl mtd =
-    { mtdl_type = Option.map modtype mtd.smtd_type;
-      mtdl_attributes = mtd.smtd_attributes;
-      mtdl_loc = mtd.smtd_loc;
-      mtdl_uid = mtd.smtd_uid }
+    { mtd_type = Option.map modtype mtd.smtd_type;
+      mtd_attributes = mtd.smtd_attributes;
+      mtd_loc = mtd.smtd_loc;
+      mtd_uid = mtd.smtd_uid }
   and modtype = function
-    | SMty_ident p -> MtyL_ident p
-    | SMty_signature offset -> MtyL_signature (signature offset)
+    | SMty_ident p -> Mty_ident p
+    | SMty_signature offset -> Mty_signature (signature offset)
     | SMty_functor (param, res) ->
-        MtyL_functor (functor_param param, modtype res)
-    | SMty_alias p -> MtyL_alias p
+        Mty_functor (functor_param param, modtype res)
+    | SMty_alias p -> Mty_alias p
   and functor_param = function
     | SUnit -> (Unit : functor_parameter)
     | SNamed (id, mty) -> Named (id, modtype mty)

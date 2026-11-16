@@ -49,15 +49,15 @@ module M :
 let rec force_sig sg =
   List.iter force_item (Subst.Lazy.force_signature_once sg)
 and force_item : Subst.Lazy.signature_item -> unit = function
-  | SigL_value (_, vd, _) -> ignore (Subst.Lazy.force_value_description vd)
-  | SigL_module (_, _, md, _, _) -> force_modtype md.mdl_type
-  | SigL_modtype (_, { mtdl_type = Some mty; _ }, _) -> force_modtype mty
+  | Sig_value (_, vd, _) -> ignore (Subst.Lazy.force_value_description vd)
+  | Sig_module (_, _, md, _, _) -> force_modtype md.md_type
+  | Sig_modtype (_, { mtd_type = Some mty; _ }, _) -> force_modtype mty
   | _ -> ()
-and force_modtype : Subst.Lazy.modtype -> unit = function
-  | MtyL_signature sg -> force_sig sg
-  | MtyL_functor (Named (_, arg), res) -> force_modtype arg; force_modtype res
-  | MtyL_functor (Unit, res) -> force_modtype res
-  | MtyL_ident _ | MtyL_alias _ -> ()
+and force_modtype : Subst.Lazy.module_type -> unit = function
+  | Mty_signature sg -> force_sig sg
+  | Mty_functor (Named (_, arg), res) -> force_modtype arg; force_modtype res
+  | Mty_functor (Unit, res) -> force_modtype res
+  | Mty_ident _ | Mty_alias _ -> ()
 
 (* Whether the signatures read eagerly and lazily print like the saved one *)
 let same_as_saved =
@@ -89,6 +89,6 @@ let same_as_saved =
 [%%expect{|
 val force_sig : Subst.Lazy.signature -> unit = <fun>
 val force_item : Subst.Lazy.signature_item -> unit = <fun>
-val force_modtype : Subst.Lazy.modtype -> unit = <fun>
+val force_modtype : Subst.Lazy.module_type -> unit = <fun>
 val same_as_saved : bool * bool = (true, true)
 |}]
