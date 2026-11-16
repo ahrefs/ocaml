@@ -30,18 +30,20 @@ exception Error of error
 (* A .cmi file has the following layout:
 
    - magic number
-   - length of the data block, as a 64-bit integer
-   - data block
-   - header: unit name and offset of the top-level signature in the data block
+   - header: unit name, data block, and offset of the top-level signature in
+     the data block, marshalled with compression
    - crcs
    - flags
 
-   The data block contains marshalled pieces of the signature: each
-   signature (the top-level one and the ones of nested modules and module
-   types) and the type of each value are marshalled separately, and refer to
-   their nested pieces by their offset in the block. When reading a .cmi
-   file, the whole data block is read into memory, but a piece is only
-   unmarshalled when the corresponding part of the signature is needed. *)
+   The data block is a string that contains marshalled pieces of the
+   signature: each signature (the top-level one and the ones of nested
+   modules and module types) and the type of each value are marshalled
+   separately, without compression, and refer to their nested pieces by their
+   offset in the block. The block is compressed as a whole, as part of the
+   header, because small pieces compress badly on their own. When reading a
+   .cmi file, the whole data block is decompressed into memory, but a piece
+   is only unmarshalled when the corresponding part of the signature is
+   needed. *)
 
 open Types
 
@@ -85,7 +87,7 @@ and serialized_modtype_decl =
    they are used to provide consistency across
    input_value and output_value usage. *)
 type flags = pers_flags list
-type header = modname * int
+type header = modname * string * int
 
 type 'sg cmi_infos_generic = {
     cmi_name : modname;
@@ -97,11 +99,12 @@ type 'sg cmi_infos_generic = {
 type cmi_infos = Types.signature cmi_infos_generic
 type cmi_infos_lazy = Subst.Lazy.signature cmi_infos_generic
 
-let serialize oc ~base sg =
+let serialize sg =
+  let buf = Buffer.create 4096 in
   let marshal x =
-    let pos = pos_out oc in
-    Compression.output_value oc x;
-    pos - base
+    let pos = Buffer.length buf in
+    Buffer.add_string buf (Marshal.to_string x []);
+    pos
   in
   let rec signature sg = marshal (List.map signature_item sg : serialized_signature)
   and signature_item = function
@@ -132,11 +135,12 @@ let serialize oc ~base sg =
     | Unit -> SUnit
     | Named (id, mty) -> SNamed (id, modtype mty)
   in
-  signature sg
+  let offset = signature sg in
+  Buffer.contents buf, offset
 
 let deserialize data offset =
   let open Subst.Lazy in
-  let unmarshal offset = Marshal.from_bytes data offset in
+  let unmarshal offset = Marshal.from_string data offset in
   let rec signature offset =
     of_deferred_signature_items
       (lazy (List.map signature_item (unmarshal offset : serialized_signature)))
@@ -174,10 +178,7 @@ let deserialize data offset =
   signature offset
 
 let input_cmi_lazy ic =
-  let really_input_bytes n = Bytes.unsafe_of_string (really_input_string ic n) in
-  let data_len = Int64.to_int (Bytes.get_int64_le (really_input_bytes 8) 0) in
-  let data = really_input_bytes data_len in
-  let (name, offset) = (input_value ic : header) in
+  let (name, data, offset) = (Compression.input_value ic : header) in
   let crcs = (input_value ic : crcs) in
   let flags = (input_value ic : flags) in
   {
@@ -226,22 +227,8 @@ let read_cmi filename = force_cmi_infos (read_cmi_lazy filename)
 let output_cmi filename oc cmi =
 (* beware: the provided signature must have been substituted for saving *)
   output_string oc Config.cmi_magic_number;
-  let output_int64 n =
-    let buf = Bytes.create 8 in
-    Bytes.set_int64_le buf 0 (Int64.of_int n);
-    output_bytes oc buf
-  in
-  (* Reserve room for the length of the data block, write the block, then
-     go back and write its length. *)
-  let len_pos = pos_out oc in
-  output_int64 0;
-  let base = pos_out oc in
-  let offset = serialize oc ~base cmi.cmi_sign in
-  let header_pos = pos_out oc in
-  seek_out oc len_pos;
-  output_int64 (header_pos - base);
-  seek_out oc header_pos;
-  output_value oc ((cmi.cmi_name, offset) : header);
+  let data, offset = serialize cmi.cmi_sign in
+  Compression.output_value oc ((cmi.cmi_name, data, offset) : header);
   flush oc;
   let crc = Digest.BLAKE128.file filename in
   let crcs = (cmi.cmi_name, Some crc) :: cmi.cmi_crcs in
