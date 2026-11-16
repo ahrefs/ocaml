@@ -2320,7 +2320,8 @@ and add_extension ~check ?shape ~rebind id ext env =
   let shape = shape_or_leaf ext.ext_uid shape in
   store_extension ~check ~rebind id addr ext shape env
 
-and add_module_declaration ?(noalias=false) ?shape ~check id presence md env =
+and add_module_declaration_lazy
+    ~update_summary ?(noalias=false) ?shape ~check id presence md env =
   let check =
     if not check then
       None
@@ -2333,26 +2334,15 @@ and add_module_declaration ?(noalias=false) ?shape ~check id presence md env =
     else
       Some (fun s -> Warnings.Unused_module s)
   in
-  let md = Subst.Lazy.of_module_decl md in
   let addr = module_declaration_address env id presence md in
-  let shape = shape_or_leaf md.mdl_uid shape in
-  let env = store_module ~check id addr presence md shape env in
+  let shape = shape_or_leaf md.Subst.Lazy.mdl_uid shape in
+  let env =
+    store_module ~update_summary ~check id addr presence md shape env
+  in
   if noalias then mark_not_aliasable id env else env
 
-and add_module_declaration_lazy ~update_summary id presence md env =
-  let addr = module_declaration_address env id presence md in
-  let shape = Shape.leaf md.Subst.Lazy.mdl_uid in
-  let env =
-    store_module ~update_summary ~check:None id addr presence md shape env
-  in
-  env
-
-and add_modtype ?shape id info env =
-  let shape = shape_or_leaf info.mtd_uid shape in
-  store_modtype id (Subst.Lazy.of_modtype_decl info) shape env
-
-and add_modtype_lazy ~update_summary id info env =
-  let shape = Shape.leaf info.Subst.Lazy.mtdl_uid in
+and add_modtype_lazy ~update_summary ?shape id info env =
+  let shape = shape_or_leaf info.Subst.Lazy.mtdl_uid shape in
   store_modtype ~update_summary id info shape env
 
 and add_class ?shape id ty env =
@@ -2364,6 +2354,14 @@ and add_cltype ?shape id ty env =
   let shape = shape_or_leaf ty.clty_uid shape in
   store_cltype id ty shape env
 
+let add_module_declaration ?noalias ?shape ~check id presence md env =
+  add_module_declaration_lazy ~update_summary:true ?noalias ?shape ~check id
+    presence (Subst.Lazy.of_module_decl md) env
+
+let add_modtype ?shape id info env =
+  add_modtype_lazy ~update_summary:true ?shape id
+    (Subst.Lazy.of_modtype_decl info) env
+
 let add_module ?noalias ?shape id presence mty env =
   add_module_declaration ~check:false ?noalias ?shape id presence (md mty) env
 
@@ -2373,7 +2371,7 @@ let add_module_lazy ~update_summary id presence mty env =
                        mdl_loc = Location.none;
                        mdl_uid = Uid.internal_not_actually_unique}
   in
-  add_module_declaration_lazy ~update_summary id presence md env
+  add_module_declaration_lazy ~update_summary ~check:false id presence md env
 
 let add_local_constraint path info env =
   { env with
@@ -2440,14 +2438,15 @@ let enter_module ~scope ?noalias s presence mty env =
 
 (* Insertion of all components of a signature *)
 
+let proj_shape (map, mod_shape) item =
+  match mod_shape with
+  | None -> map, None
+  | Some mod_shape ->
+      let shape = Shape.proj mod_shape item in
+      Shape.Map.add map item shape, Some shape
+
 let add_item (map, mod_shape) comp env =
-  let proj_shape item =
-    match mod_shape with
-    | None -> map, None
-    | Some mod_shape ->
-        let shape = Shape.proj mod_shape item in
-        Shape.Map.add map item shape, Some shape
-  in
+  let proj_shape = proj_shape (map, mod_shape) in
   match comp with
   | Sig_value(id, decl, _) ->
       let map, shape = proj_shape (Shape.Item.value id) in
@@ -2478,6 +2477,41 @@ let rec add_signature (map, mod_shape) sg env =
       let map, env = add_item (map, mod_shape) comp env in
       add_signature (map, mod_shape) rem env
 
+let add_item_lazy (map, mod_shape) comp env =
+  let open Subst.Lazy in
+  let proj_shape = proj_shape (map, mod_shape) in
+  match comp with
+  | SigL_value(id, decl, _) ->
+      let map, shape = proj_shape (Shape.Item.value id) in
+      map, add_value ?shape id (force_value_description decl) env
+  | SigL_type(id, decl, _, _) ->
+      let map, shape = proj_shape (Shape.Item.type_ id) in
+      map, add_type ~check:false ?shape id decl env
+  | SigL_typext(id, ext, _, _) ->
+      let map, shape = proj_shape (Shape.Item.extension_constructor id) in
+      map, add_extension ~check:false ?shape ~rebind:false id ext env
+  | SigL_module(id, presence, md, _, _) ->
+      let map, shape = proj_shape (Shape.Item.module_ id) in
+      map,
+      add_module_declaration_lazy ~update_summary:true ~check:false ?shape id
+        presence md env
+  | SigL_modtype(id, decl, _)  ->
+      let map, shape = proj_shape (Shape.Item.module_type id) in
+      map, add_modtype_lazy ~update_summary:true ?shape id decl env
+  | SigL_class(id, decl, _, _) ->
+      let map, shape = proj_shape (Shape.Item.class_ id) in
+      map, add_class ?shape id decl env
+  | SigL_class_type(id, decl, _, _) ->
+      let map, shape = proj_shape (Shape.Item.class_type id) in
+      map, add_cltype ?shape id decl env
+
+let rec add_signature_lazy (map, mod_shape) sg env =
+  match sg with
+      [] -> map, env
+  | comp :: rem ->
+      let map, env = add_item_lazy (map, mod_shape) comp env in
+      add_signature_lazy (map, mod_shape) rem env
+
 let enter_signature_and_shape ~scope ~parent_shape mod_shape sg env =
   let sg = Subst.signature (Rescope scope) Subst.identity sg in
   let shape, env = add_signature (parent_shape, mod_shape) sg env in
@@ -2497,8 +2531,14 @@ let add_value = add_value ?shape:None
 let add_class = add_class ?shape:None
 let add_cltype = add_cltype ?shape:None
 let add_modtype = add_modtype ?shape:None
+let add_modtype_lazy = add_modtype_lazy ?shape:None
+let add_module_declaration_lazy ?noalias ~update_summary =
+  add_module_declaration_lazy ?noalias ~update_summary ?shape:None ~check:false
 let add_signature sg env =
   let _, env = add_signature (Shape.Map.empty, None) sg env in
+  env
+let add_signature_lazy sg env =
+  let _, env = add_signature_lazy (Shape.Map.empty, None) sg env in
   env
 
 (* Add "unbound" bindings *)
